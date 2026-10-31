@@ -70,7 +70,7 @@ With `terrane` available on `PATH`, run from this package directory:
 
 ```text
 terrane check .
-../../target/release/terrane test .
+terrane test .
 ```
 
 The unit regression checks typed failure for a nonexistent explicit executable and does not require an installed browser. The converter's real-PDF regression remains the end-to-end consumer check for code/prose boundaries, image/font readiness, disclosure visibility, pagination, and atomic output delivery.
