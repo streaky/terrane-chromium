@@ -1,0 +1,25 @@
+package = "streaky/chromium"
+artifact = "library"
+rust-toolchain = "pinned"
+
+[namespaces]
+"streaky/chromium" = "src"
+
+[rust-modules]
+chromium_backend = "rust/backend.rs"
+
+[rust-dependencies.headless-chrome]
+package = "headless_chrome"
+version = "=1.0.22"
+effects = ["filesystem", "process", "threads", "networking", "build"]
+
+[profile]
+capabilities = ["filesystem", "process", "threads", "networking", "build"]
+
+[testing]
+unit = "tests/unit"
+
+[rust-dependencies.tempfile]
+version = "=3.27.0"
+effects = ["filesystem"]
+

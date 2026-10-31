@@ -1,0 +1,49 @@
+namespace streaky/chromium
+
+from /core/errors import throwable
+
+public class chromium-error implements throwable
+    message string = ''
+
+    function construct; message string
+        this.message = message
+
+    function render string;
+        return this.message
+
+public class browser-options
+    executable string|none = none
+
+public class pdf-options
+    display-header-footer bool = false
+    print-background bool = false
+    prefer-css-page-size bool = false
+    expand-disclosures bool = false
+
+private class pdf-outcome
+    data bytes = b''
+    error string = ''
+
+public function find-executable string|none;
+    detected string = rust
+        crate::chromium_backend::find_executable().unwrap_or_default()
+    if detected == ''
+        return none
+    return detected
+
+public function render-pdf bytes throws chromium-error; html ref string, browser ref browser-options, printing ref pdf-options
+    outcome pdf-outcome = rust
+        match crate::chromium_backend::render_pdf(
+            html,
+            browser.executable.as_deref(),
+            printing.display_header_footer,
+            printing.print_background,
+            printing.prefer_css_page_size,
+            printing.expand_disclosures,
+        ) {
+            Ok(data) => PdfOutcome { data, error: String::new() },
+            Err(error) => PdfOutcome { data: Vec::new(), error },
+        }
+    if outcome.error != ''
+        throw chromium-error; move outcome.error
+    return move outcome.data
