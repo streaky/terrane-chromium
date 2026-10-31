@@ -1,0 +1,314 @@
+namespace streaky/chromium
+
+from /core/documents import document-value
+from /core/documents/json import parse-json, default-json-options
+from /core/codecs import decode-base64
+from /deps/headless-chrome import Browser as native-browser
+from /deps/crossbeam-channel import Receiver as native-event-receiver
+
+public class viewport-options
+    width int = 1280
+    height int = 720
+    device-scale-factor float = 1.0
+
+public class load-options
+    base-url string|none = none
+    wait-for-assets bool = true
+    ready-selector string|none = none
+    ready-expression string|none = none
+
+public class screenshot-options
+    format string = 'png'
+    quality int|none = none
+    full-page bool = false
+
+private class page-state
+    browser native-browser|none = none
+    events (native-event-receiver of string)|none = none
+    target-id string = ''
+    timeout-ms int = 30000
+    injected-html bool = true
+    error string = ''
+
+private class operation-outcome
+    value string = ''
+    error string = ''
+
+private class binary-outcome
+    data bytes = b''
+    error string = ''
+
+private class paper-dimensions
+    width float|none = none
+    height float|none = none
+
+private function require-page; state ref page-state
+    if state.browser == none
+        throw chromium-error; 'page is closed'
+
+private function finish-operation; message string
+    if message != ''
+        throw chromium-error; move message
+
+private function decode-page-document document-value; outcome operation-outcome
+    finish-operation; outcome.error
+    parsed = parse-json; outcome.value, (default-json-options;)
+    if parsed.failed
+        throw chromium-error; 'could not decode browser result: ' + parsed.message
+    return move parsed.value
+
+private function validate-viewport; viewport ref viewport-options
+    if viewport.width <= 0 or viewport.width > 2147483647 or viewport.height <= 0 or viewport.height > 2147483647
+        throw chromium-error; 'viewport dimensions must be positive 32-bit integers'
+    if not viewport.device-scale-factor.finite or viewport.device-scale-factor <= 0.0
+        throw chromium-error; 'device scale factor must be finite and positive'
+
+private function validate-positive; value float|none, name string
+    if value != none
+        if not value.finite or value <= 0.0
+            throw chromium-error; name + ' must be finite and positive'
+
+private function validate-margin; value float|none, name string
+    if value != none
+        if not value.finite or value < 0.0
+            throw chromium-error; name + ' must be finite and nonnegative'
+
+private function millimetres-to-inches float|none; value float|none
+    if value != none
+        return value / 25.4
+    return none
+
+private function pdf-paper paper-dimensions; printing ref pdf-options
+    dimensions = instance paper-dimensions;
+    size = printing.paper-size
+    if size != none
+        if printing.paper-width-mm != none or printing.paper-height-mm != none
+            throw chromium-error; 'named and custom paper sizes are mutually exclusive'
+        switch
+            case size == 'A3'
+                dimensions.width = 297.0 / 25.4
+                dimensions.height = 420.0 / 25.4
+            case size == 'A4'
+                dimensions.width = 210.0 / 25.4
+                dimensions.height = 297.0 / 25.4
+            case size == 'A5'
+                dimensions.width = 148.0 / 25.4
+                dimensions.height = 210.0 / 25.4
+            case size == 'Letter'
+                dimensions.width = 8.5
+                dimensions.height = 11.0
+            case size == 'Legal'
+                dimensions.width = 8.5
+                dimensions.height = 14.0
+            case else
+                throw chromium-error; 'unknown paper size: ' + size
+    else
+        if (printing.paper-width-mm == none) != (printing.paper-height-mm == none)
+            throw chromium-error; 'custom paper width and height must be supplied together'
+        validate-positive; printing.paper-width-mm, 'paper width'
+        validate-positive; printing.paper-height-mm, 'paper height'
+        width = printing.paper-width-mm
+        height = printing.paper-height-mm
+        if width != none
+            dimensions.width = width / 25.4
+        if height != none
+            dimensions.height = height / 25.4
+    validate-margin; printing.margin-top-mm, 'top margin'
+    validate-margin; printing.margin-bottom-mm, 'bottom margin'
+    validate-margin; printing.margin-left-mm, 'left margin'
+    validate-margin; printing.margin-right-mm, 'right margin'
+    scale = printing.scale
+    if scale != none
+        if not scale.finite or scale < 0.1 or scale > 2.0
+            throw chromium-error; 'PDF scale must be finite and between 0.1 and 2.0'
+    return move dimensions
+
+public class page
+    private state page-state
+
+    private function construct; state page-state
+        this.state = move state
+
+    function is-open bool;
+        return this.state.browser != none
+
+    mutable function navigate; url ref string, loading ref load-options
+        this.state.injected-html = false
+        page-navigate; this.state, url, loading
+
+    mutable function set-html; html ref string, loading ref load-options
+        this.state.injected-html = true
+        page-set-html; this.state, html, loading
+
+    mutable function set-viewport; viewport ref viewport-options
+        page-set-viewport; this.state, viewport
+
+    mutable function wait-for-selector; selector ref string
+        page-wait-selector; this.state, selector
+
+    mutable function wait-for; expression ref string
+        page-wait; this.state, expression
+
+    mutable function evaluate document-value; expression ref string, await-promise bool
+        return page-evaluate; this.state, expression, await-promise
+
+    mutable function screenshot bytes; options ref screenshot-options
+        return page-screenshot; this.state, options
+
+    mutable function print-pdf bytes; printing ref pdf-options
+        return page-print; this.state, printing
+
+    mutable function diagnostics document-value;
+        return page-diagnostics; this.state
+
+    mutable function close;
+        if this.state.browser == none
+            return
+        message = page-close; this.state
+        this.state.events = none
+        this.state.browser = none
+        finish-operation; move message
+
+    function destruct;
+        # Source owns the browser and event receiver. Native Drop cleans up on
+        # errors/scope exit; explicit close additionally reports CDP close errors.
+        this.state.events = none
+        this.state.browser = none
+
+public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
+    validate-viewport; viewport
+    if browser.timeout-ms <= 0 or browser.timeout-ms > 2147483647
+        throw chromium-error; 'timeout must be a positive 32-bit millisecond count'
+    if browser.diagnostic-capacity <= 0 or browser.diagnostic-capacity > 2147483647
+        throw chromium-error; 'diagnostic capacity must be a positive 32-bit count'
+    # chromium/projection-launch-options: native construction is unavailable.
+    # Transfer Browser/Receiver into source-owned slots, not a global registry.
+    state page-state = rust
+        match crate::chromium_backend::open_page(
+            browser.executable.as_deref(),
+            browser.timeout_ms.to_string().parse::<u64>().expect("validated timeout"),
+            viewport.width.to_string().parse::<u32>().expect("validated width"),
+            viewport.height.to_string().parse::<u32>().expect("validated height"),
+            viewport.device_scale_factor,
+            browser.diagnostic_capacity.to_string().parse::<usize>().expect("validated capacity"),
+        ) {
+            Ok((owner, events, target_id)) => {
+                let mut state = PageState::terrane_construct();
+                state.browser = Some(owner);
+                state.events = Some(events);
+                state.target_id = target_id;
+                state
+            },
+            Err(error) => {
+                let mut state = PageState::terrane_construct();
+                state.error = error;
+                state
+            },
+        }
+    finish-operation; state.error
+    state.timeout-ms = browser.timeout-ms
+    return shared ref (instance page; move state)
+
+# The following blocks adapt source-owned fields/results to the documented
+# native Arc<Tab>/generic-CDP boundary. No public native handles escape. Ordinary
+# validation, units, lifecycle and policy live above in Terrane; remove these
+# blocks with that boundary when the required projected operations are admitted.
+
+private function page-navigate; state ref page-state, url ref string, loading ref load-options
+    require-page; state
+    message string = rust
+        crate::chromium_backend::navigate(state.browser.as_ref().expect("checked open page"), &state.target_id, url, loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+    finish-operation; move message
+
+private function page-set-html; state ref page-state, html ref string, loading ref load-options
+    require-page; state
+    message string = rust
+        crate::chromium_backend::set_html(state.browser.as_ref().expect("checked open page"), &state.target_id, html, loading.base_url.as_deref(), loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+    finish-operation; move message
+
+private function page-set-viewport; state ref page-state, viewport ref viewport-options
+    require-page; state
+    validate-viewport; viewport
+    message string = rust
+        crate::chromium_backend::set_viewport(state.browser.as_ref().expect("checked open page"), &state.target_id, viewport.width.to_string().parse::<u32>().expect("validated width"), viewport.height.to_string().parse::<u32>().expect("validated height"), viewport.device_scale_factor).err().unwrap_or_default()
+    finish-operation; move message
+
+private function page-wait-selector; state ref page-state, selector ref string
+    require-page; state
+    message string = rust
+        crate::chromium_backend::wait_for_selector(state.browser.as_ref().expect("checked open page"), &state.target_id, selector, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+    finish-operation; move message
+
+private function page-wait; state ref page-state, expression ref string
+    require-page; state
+    message string = rust
+        crate::chromium_backend::wait_for(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+    finish-operation; move message
+
+private function page-evaluate document-value; state ref page-state, expression ref string, await-promise bool
+    require-page; state
+    outcome operation-outcome = rust
+        match crate::chromium_backend::evaluate(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, await_promise, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
+            Ok(value) => OperationOutcome { value, error: String::new() },
+            Err(error) => OperationOutcome { value: String::new(), error },
+        }
+    return decode-page-document; move outcome
+
+private function page-screenshot bytes; state ref page-state, options ref screenshot-options
+    require-page; state
+    if options.format != 'png' and options.format != 'jpeg'
+        throw chromium-error; 'screenshot format must be png or jpeg'
+    quality = options.quality
+    if quality != none
+        if options.format != 'jpeg' or quality < 0 or quality > 100
+            throw chromium-error; 'quality is only valid for JPEG and must be between 0 and 100'
+    # CDP returns base64; decoding is an ordinary source codec operation.
+    outcome operation-outcome = rust
+        match crate::chromium_backend::screenshot(state.browser.as_ref().expect("checked open page"), &state.target_id, &options.format,
+            options.quality.as_ref().map(|quality| quality.to_string().parse::<u32>().expect("validated quality")),
+            options.full_page) {
+            Ok(value) => OperationOutcome { value, error: String::new() },
+            Err(error) => OperationOutcome { value: String::new(), error },
+        }
+    finish-operation; outcome.error
+    decoded = decode-base64; move outcome.value, false, true
+    if decoded.failed
+        throw chromium-error; 'could not decode screenshot: ' + decoded.message
+    return move decoded.value
+
+private function page-print bytes; state ref page-state, printing ref pdf-options
+    require-page; state
+    dimensions = pdf-paper; printing
+    # Unit conversion and named sizes are source policy, not a native gap.
+    top = millimetres-to-inches; printing.margin-top-mm
+    bottom = millimetres-to-inches; printing.margin-bottom-mm
+    left = millimetres-to-inches; printing.margin-left-mm
+    right = millimetres-to-inches; printing.margin-right-mm
+    outcome binary-outcome = rust
+        match crate::chromium_backend::print_pdf(state.browser.as_ref().expect("checked open page"), &state.target_id,
+            printing.display_header_footer, printing.print_background,
+            printing.prefer_css_page_size, printing.expand_disclosures,
+            dimensions.width, dimensions.height, printing.landscape,
+            top, bottom, left, right, printing.scale,
+            printing.page_ranges.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
+            Ok(data) => BinaryOutcome { data, error: String::new() },
+            Err(error) => BinaryOutcome { data: Vec::new(), error },
+        }
+    finish-operation; outcome.error
+    return move outcome.data
+
+private function page-diagnostics document-value; state ref page-state
+    require-page; state
+    outcome operation-outcome = rust
+        match crate::chromium_backend::diagnostics(state.browser.as_ref().expect("checked open page"), &state.target_id, state.events.as_ref().expect("open page events"), state.injected_html, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
+            Ok(value) => OperationOutcome { value, error: String::new() },
+            Err(error) => OperationOutcome { value: String::new(), error },
+        }
+    return decode-page-document; move outcome
+
+private function page-close string; state ref page-state
+    # Closing uses the same unprojectable native tab handle; source releases its
+    # owner slots even if close reports an error. Browser Drop is the backstop.
+    message string = rust
+        crate::chromium_backend::close(state.browser.as_ref().expect("checked open page"), &state.target_id).err().unwrap_or_default()
+    return move message

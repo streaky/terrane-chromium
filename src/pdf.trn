@@ -13,16 +13,24 @@ public class chromium-error implements throwable
 
 public class browser-options
     executable string|none = none
+    timeout-ms int = 30000
+    diagnostic-capacity int = 1000
 
 public class pdf-options
     display-header-footer bool = false
     print-background bool = false
     prefer-css-page-size bool = false
     expand-disclosures bool = false
-
-private class pdf-outcome
-    data bytes = b''
-    error string = ''
+    paper-size string|none = none
+    paper-width-mm float|none = none
+    paper-height-mm float|none = none
+    landscape bool = false
+    margin-top-mm float|none = none
+    margin-bottom-mm float|none = none
+    margin-left-mm float|none = none
+    margin-right-mm float|none = none
+    scale float|none = none
+    page-ranges string|none = none
 
 public function find-executable string|none;
     # chromium/projection-path-text: discovery returns a native PathBuf without
@@ -38,20 +46,11 @@ public function find-executable string|none;
     return detected
 
 public function render-pdf bytes throws chromium-error; html ref string, browser ref browser-options, printing ref pdf-options
-    # Native launch and Arc<Tab> member gaps are documented in rust/backend.rs.
-    # This block only translates the native result into the package's typed error.
-    outcome pdf-outcome = rust
-        match crate::chromium_backend::render_pdf(
-            html,
-            browser.executable.as_deref(),
-            printing.display_header_footer,
-            printing.print_background,
-            printing.prefer_css_page_size,
-            printing.expand_disclosures,
-        ) {
-            Ok(data) => PdfOutcome { data, error: String::new() },
-            Err(error) => PdfOutcome { data: Vec::new(), error },
-        }
-    if outcome.error != ''
-        throw chromium-error; move outcome.error
-    return move outcome.data
+    viewport = instance viewport-options;
+    loading = instance load-options;
+    document = open-page; browser, viewport
+    try
+        document.set-html; html, loading
+        return document.print-pdf; printing
+    finally
+        document.close;

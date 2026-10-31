@@ -15,3 +15,4 @@ navigation:
   numbering: none
   children:
   - source: records/api/pdf.yaml
+  - source: records/api/page.yaml

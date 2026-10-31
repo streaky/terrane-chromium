@@ -1,10 +1,10 @@
 # streaky/chromium
 
-A Terrane library for Chromium-backed operations. Its current surface is deliberately small: installed-browser discovery and HTML-to-PDF rendering. It extracts the browser boundary previously owned by docs-converter, without introducing a second document renderer or a general browser-automation API.
+A Terrane library for Chromium-backed page operations and HTML-to-PDF rendering. The managed page API supports navigation, HTML installation, readiness waits, evaluation, screenshots, PDF printing, and bounded diagnostics; `render-pdf` remains a one-shot convenience function. Callers own content policy, storage, and output delivery.
 
 ## Manual
 
-The [Terrane manual IR publication](docs/src/manual.yaml) follows the same `docs/src/` layout as dbkit. It contains an [introduction and runtime setup](docs/src/records/guides/introduction.yaml), a [complete render-and-save tutorial](docs/src/records/tutorials/render-pdf.yaml), and the [public API reference](docs/src/records/api/pdf.yaml), including options, errors, asset handling, and security boundaries.
+The [Terrane manual IR publication](docs/src/manual.yaml) follows the `docs/src/` layout. It includes an [introduction and runtime setup](docs/src/records/guides/introduction.yaml), a [complete render-and-save tutorial](docs/src/records/tutorials/render-pdf.yaml), and references for [PDF rendering](docs/src/records/api/pdf.yaml) and the [managed page API](docs/src/records/api/page.yaml), including security, diagnostics, and lazy/infinite content boundaries.
 
 From this package directory in a Terrane checkout, render it with docs-converter:
 
@@ -23,54 +23,46 @@ path = "../chromium"
 
 Choose the path relative to the consuming package manifest. This is an ordinary source-composed Terrane library; it has no helper executable or manual bootstrap step.
 
-## HTML to PDF
+## Existing PDF convenience API
 
-```terrane
-from /streaky/chromium import browser-options, pdf-options, render-pdf
+`render-pdf` continues to render supplied HTML and return PDF bytes. Its existing contract is independent of the managed page API; docs-converter retains its `render-pdf(html,browser,printing)` call shape.
 
-browser = instance browser-options;
-printing = instance pdf-options;
-printing.print-background = true
-printing.prefer-css-page-size = true
-html = '<!doctype html><h1>Report</h1>'
-pdf = render-pdf; html, browser, printing
-```
+## Managed page API
 
-`render-pdf` borrows the HTML and options, returns PDF `bytes`, and throws `chromium-error` on browser, document-installation, asset-readiness, or printing failure. Call it from a function whose error contract admits `chromium-error`, or catch that error. The caller owns persistence and any atomic-file-write policy; rendering itself never writes an output file.
+The public page API is documented in the [manual reference](docs/src/records/api/page.yaml). `open-page` accepts `browser-options` and `viewport-options`, returning a managed page. Configure browser `executable` (default `none` for discovery), `timeout-ms` (30000), and bounded `diagnostic-capacity` (1000). Viewport defaults are 1280×720 at device scale factor 1.0.
 
-### Browser options
+The page supports URL navigation and HTML installation with load readiness options, viewport changes, selector/expression waits, JSON-compatible evaluation, PNG/JPEG screenshots, PDF printing, diagnostics, and idempotent close. `is-open` is the only operation that does not throw `chromium-error`; close is safe to repeat. Page cleanup also follows final shared ownership destruction. Evaluation exceptions, rejected promises, undefined and other non-JSON results are errors. PDF paper sizes, custom paired dimensions, margins, scale, orientation, page ranges, CSS precedence, and print-media behavior are detailed in the manual reference.
 
-- `executable string|none`, default `none`: an explicit Chromium/Chrome executable, or automatic installed-browser discovery.
-- `find-executable;` returns an installed executable filename or `none`. Discovery honors `CHROME` and the backend's normal platform search locations. This is discovery, not a browser launch or download.
+Full-page screenshot captures the current document extent, not all lazy or infinite-scroll content. Use page evaluation and application-specific waits to prepare content; no universal exhaustion guarantee exists. Diagnostics drain bounded best-effort events and are not a complete waterfall, HAR, or audit log.
 
-The package launches a headless browser with its sandbox enabled and a temporary private profile. It does not download Chromium or silently disable its sandbox. Install Chromium/Chrome, set `CHROME`, or supply `browser.executable`. On Unix, keep `TMPDIR` short enough for Chromium's Unix-domain sockets; the normal `/tmp` default works.
+## Security
 
-### Print options
+The library does not sanitize HTML or JavaScript, restrict URL schemes or network destinations, or promise SSRF, filesystem, or network isolation. Active content, redirects, and browser vulnerabilities can access resources available under the host's privileges. Browser sandboxing remains enabled but is not network policy. Constrain untrusted content using caller-managed OS/container and network controls. Captures and diagnostics may expose private page data and secret-bearing URLs; redact and access-control them. Cookies are not returned deliberately. Operation timeouts are not overall CPU, memory, or network budgets.
 
-All four fields default to `false`:
+No page clicking/typing, multi-page automation, downloads, raw CDP, or complete waterfall/HAR API is provided.
 
-- `display-header-footer`: include Chromium's print headers and footers.
-- `print-background`: print background graphics.
-- `prefer-css-page-size`: honor the page size declared by the document's CSS.
-- `expand-disclosures`: open HTML `details` elements before printing. This is opt-in; ordinary rendering preserves the document's disclosure state.
+## Native boundary
 
-Rendering installs the supplied HTML DOM directly, waits for embedded images to decode and document fonts to be ready, then invokes Chromium's print engine. It does not convert through Markdown. Relative URLs have no caller-selected base URL; supply self-contained HTML, embedded assets, or deliberately absolute URLs. HTML is active browser content, not sanitized documentation IR: use trusted HTML or apply your own content policy before calling the library. Browser sandboxing is not a network-access policy.
+Public types belong to `streaky/chromium`; native browser and tab handles are private. The maintained backend accounts for browser launch lifetime inputs, opaque `Arc<Tab>` handles, and generic CDP/associated responses not expressible through current projection. These are projection limitations, not policy requirements; native code should be removed when the relevant calls and responses can be expressed through source. It is not retained to avoid short-lived clones.
 
-## Boundaries and future use
+The backend uses `headless_chrome` 1.0.22. Native types are not part of the public API.
 
-Public types belong to `streaky/chromium`, not to its Rust backend. The current one-shot operation owns and closes its browser/tab lifetime before returning, and exposes no native handles. A future reusable session or another Chromium operation can be added alongside this convenience function without changing its byte-returning contract. No session, screenshot, navigation, arbitrary-script, browser-download, or sandbox-disable API is implemented or promised here.
+The private `rust/events.rs` observer handles an upstream event-parser incompatibility with Terrane's exact-number JSON features: fractional timestamps otherwise cause console/network events to be silently discarded. It parses a local, target-scoped CDP event stream as JSON values without changing document-number semantics. This compatibility bridge and its removal criteria are documented beside the implementation; it is not a public raw-CDP API.
 
-A narrow maintained [Rust module](rust/backend.rs) owns the current browser integration boundary because configured browser construction and operations through its opaque `Arc<Tab>` are not admitted by Terrane projection. It is not retained to avoid small, short-lived clones. Comments in that file explain each operation, distinguish policy from projection gaps, and state the removal criterion. The small native path-to-text discovery conversion lives directly in a Terrane `rust` block. See the manual's [native-boundary accounting](docs/src/records/guides/introduction.yaml) for the current gaps. Document structure and output delivery stay with callers.
-
-The backend is pinned to `headless_chrome` 1.0.22. [Upstream documentation](https://github.com/rust-headless-chrome/rust-headless-chrome) describes its installed-browser discovery and Chromium integration; those native types are not part of this package's public API.
 
 ## Development
 
 With `terrane` available on `PATH`, run from this package directory:
 
-```text
+```sh
 terrane check .
-terrane test .
+terrane test . --tier unit
 ```
 
-The unit regression checks typed failure for a nonexistent explicit executable and does not require an installed browser. The converter's real-PDF regression remains the end-to-end consumer check for code/prose boundaries, image/font readiness, disclosure visibility, pagination, and atomic output delivery.
+For real-browser tests, set `CHROME` to the installed Chromium/Chrome executable and pass that path to the test runner:
+
+```sh
+terrane test . --argument "$CHROME" --timeout 60s
+```
+
+The real-browser cases exercise page operations against controlled fixtures. Without a browser argument they skip; the missing-executable unit regression needs no installed browser. The docs-converter suite separately checks its PDF consumer behavior.

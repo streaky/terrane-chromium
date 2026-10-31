@@ -13,20 +13,21 @@ documentation:
   status: complete
   title: streaky/chromium
   title-style: text
-  summary: Installed-browser discovery and direct HTML-to-PDF rendering for Terrane applications.
+  summary: Managed Chromium pages for URL and HTML loading, JavaScript, screenshots, diagnostics, and PDF rendering.
   tags:
   - chromium
   - pdf
   blocks:
   - type: markdown
     markdown: |-
-      `streaky/chromium` renders supplied HTML through Chromium's print engine and
-      returns PDF bytes. It also discovers installed Chromium/Chrome executables.
-      It is a one-shot browser operation, not a document renderer: callers supply
-      HTML and own storage, uploads, and document-specific print policy.
+      `streaky/chromium` exposes a managed Chromium page API and a one-shot
+      HTML-to-PDF convenience function. Callers supply page content and own
+      storage, uploads, and document-specific policy.
 
-      Start with [[chromium.tutorial.render-pdf]] for a complete application.
-      [[chromium.api.pdf]] documents every public function, option, and error.
+      Start with [[chromium.api.page]] for page operations, options, diagnostics,
+      security, and lazy-loading limits. The PDF convenience API is documented in
+      [[chromium.api.pdf]], with a complete application in
+      [[chromium.tutorial.render-pdf]].
   - type: example
     id: package-manifest
     title: Consumer package.toml
@@ -79,11 +80,12 @@ documentation:
     blocks:
     - type: markdown
       markdown: |-
-        The public API contains Terrane-owned types only. Native browser and tab
-        handles remain private and are closed when the operation ends. There is no
-        public session, screenshot, navigation, arbitrary-script, browser-download,
-        or sandbox-disable API. The private backend uses `headless_chrome` 1.0.22;
-        its native types are not part of the package's public contract.
+        The public API contains Terrane-owned options and a source-owned shared
+        page. Native browser and tab handles remain private. A page can navigate,
+        install HTML, evaluate JavaScript, inspect diagnostics, capture screenshots,
+        and print PDFs before explicit close or final-owner cleanup. See
+        [[chromium.api.page]]. Browser downloads, sandbox disabling, click/type
+        automation, and multi-page orchestration are not exposed.
   - id: native-boundary
     title: Current native-boundary accounting
     blocks:
@@ -107,10 +109,19 @@ documentation:
           projected `to_string_lossy` member (`T0055`). This small conversion is
           inline in `src/pdf.trn`, not a separate Rust helper. Remove it when
           discovery and native path text conversion can compose in source.
+        - `chromium/json-event-compatibility`: Terrane's document runtime enables
+          exact-number JSON features that make the upstream event enum reject
+          fractional timestamps. The private `rust/events.rs` observer reads a
+          local target-scoped CDP stream as JSON values, preserving real console
+          and network evidence without weakening document-number semantics.
+          Remove it and its direct WebSocket dependency when the upstream parser
+          accepts fractional-timestamp events with those features enabled and
+          the real-browser diagnostics regressions pass.
 
-        The remaining browser calls share one native scope so browser and tab
-        cleanup occurs on success and failure. Moving those calls into separate
-        inline Rust blocks would not close the gaps. Disclosure expansion and
+        Source owns browser and event-receiver lifetimes. Each native operation
+        briefly obtains the stable target's opaque tab handle; native owners are
+        released on explicit close or final-owner destruction. Small expected
+        handle clones do not justify this boundary. Disclosure expansion and
         readiness waiting are package behavior; their native placement follows
         from the opaque tab receiver, not a distinct language limitation.
         Likewise, the owned HTML copy required by the CDP request and local Rust

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
-- Extracted HTML-to-PDF rendering from docs-converter into `streaky/chromium`.
-- Exposed package-owned browser discovery, browser/print options, PDF bytes, and `chromium-error`; native Chromium types remain private.
-- Preserved installed-browser discovery, sandboxed private profiles, image/font readiness, and optional disclosure expansion. Output persistence remains caller-owned.
+- Added a managed page API for navigation, HTML installation, readiness waits, evaluation, screenshots, PDF printing, diagnostics, and explicit cleanup.
+- Added browser, viewport, load, screenshot, and expanded PDF options; diagnostics are bounded best-effort event snapshots.
+- Documented security limits, caller-managed confinement, and current-extent capture behavior for lazy and infinite-scroll content.
+- Preserved the existing HTML-to-PDF convenience operation and docs-converter call contract.
+- Preserved console/network evidence under Terrane's exact-number JSON dependency features using a private target-scoped event observer; navigation readiness no longer relies on the incompatible upstream event parser.

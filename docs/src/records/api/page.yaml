@@ -1,0 +1,203 @@
+format: 1
+id: chromium.api.page
+kind: topic
+surface: null
+lifecycle:
+  status: current
+  stability: experimental
+  since: unversioned
+  deprecated-since: null
+  removed-in: null
+  replacement: null
+documentation:
+  status: complete
+  title: Browser page API
+  title-style: text
+  summary: Browser and viewport settings, page navigation and HTML, readiness, evaluation, screenshots, PDF, diagnostics, and cleanup.
+  tags:
+  - chromium
+  - browser
+  - page
+  blocks:
+  - type: markdown
+    markdown: |-
+      Import public declarations from `/streaky/chromium`. `open-page` creates a managed page and throws `chromium-error` on launch or setup failure. The returned page owns its browser lifetime; call `close` when finished. Cleanup also occurs when the final shared page owner is destroyed. `close` is idempotent. Every page operation except `is-open` throws `chromium-error` on failure.
+  - type: example
+    id: method-signatures
+    title: Page operation signatures
+    language: terrane
+    mode: illustrative
+    target: null
+    timeout-ms: null
+    source: |-
+      public function open-page shared ref page throws chromium-error; browser ref browser-options, viewport ref viewport-options
+
+      public class page
+          function is-open bool;
+          mutable function navigate; url ref string, loading ref load-options
+          mutable function set-html; html ref string, loading ref load-options
+          mutable function set-viewport; viewport ref viewport-options
+          mutable function wait-for-selector; selector ref string
+          mutable function wait-for; expression ref string
+          mutable function evaluate document-value; expression ref string, await-promise bool
+          mutable function screenshot bytes; options ref screenshot-options
+          mutable function print-pdf bytes; printing ref pdf-options
+          mutable function diagnostics document-value;
+          mutable function close;
+    response: null
+    diagnostic: null
+    markdown: null
+  sections:
+  - id: configuration
+    title: Configuration types
+    blocks:
+    - type: table
+      id: options
+      title: Option fields and defaults
+      show-header: true
+      columns:
+      - id: type
+        title: Type
+        cell: code
+      - id: field
+        title: Field
+        cell: code
+      - id: default
+        title: Default
+        cell: code
+      - id: behavior
+        title: Meaning
+        cell: text
+      rows:
+      - type: browser-options
+        field: executable string|none
+        default: none
+        behavior: Explicit browser executable; none uses installed-browser discovery.
+      - type: browser-options
+        field: timeout-ms int
+        default: '30000'
+        behavior: Readiness and JavaScript timeout in milliseconds; browser startup and CDP transport also have upstream time limits.
+      - type: browser-options
+        field: diagnostic-capacity int
+        default: '1000'
+        behavior: Bounded capacity for captured diagnostic events.
+      - type: viewport-options
+        field: width int; height int
+        default: 1280; 720
+        behavior: Viewport dimensions.
+      - type: viewport-options
+        field: device-scale-factor float
+        default: '1.0'
+        behavior: Device scale factor.
+      - type: load-options
+        field: base-url string|none
+        default: none
+        behavior: Base URL for set-html only.
+      - type: load-options
+        field: wait-for-assets bool
+        default: 'true'
+        behavior: Wait for document images to decode and document fonts to become ready.
+      - type: load-options
+        field: ready-selector string|none
+        default: none
+        behavior: Additionally wait for a matching selector after loading.
+      - type: load-options
+        field: ready-expression string|none
+        default: none
+        behavior: Additionally wait for a truthy JavaScript expression after loading.
+      - type: screenshot-options
+        field: format string
+        default: png
+        behavior: png or jpeg.
+      - type: screenshot-options
+        field: quality int|none
+        default: none
+        behavior: JPEG quality from 0 through 100; JPEG only.
+      - type: screenshot-options
+        field: full-page bool
+        default: 'false'
+        behavior: Capture full current document extent instead of only the viewport.
+    - type: markdown
+      markdown: |-
+        Construct option values with `instance` and assign fields as needed. `pdf-options` retains `display-header-footer`, `print-background`, `prefer-css-page-size`, and `expand-disclosures` (all `false` by default). It also accepts `paper-size string|none` (A4, A3, A5, Letter, Legal; case-sensitive), paired `paper-width-mm` and `paper-height-mm` float fields, `landscape bool` (false), optional `margin-top-mm`, `margin-bottom-mm`, `margin-left-mm`, and `margin-right-mm`, `scale float|none` (0.1 through 2), and `page-ranges string|none`. Custom dimensions must be supplied as a pair and cannot be combined with a named paper size. Dimensions and margins are millimetres, converted to inches for Chromium. CSS page size takes precedence when `prefer-css-page-size` is true. Printing uses print media; screenshots use screen media.
+
+        Paper dimensions describe the unrotated sheet; `landscape` swaps its
+        width and height. For a 180 mm wide by 120 mm high landscape result,
+        configure width 120 mm, height 180 mm, and `landscape` true.
+        Authored CSS still participates in print layout, including page orientation
+        and margins; the size-preference flag is not a general CSS override.
+  - id: page-workflow
+    title: Navigate, inspect, and capture
+    blocks:
+    - type: example
+      id: complete-workflow
+      title: Complete page workflow
+      language: terrane
+      mode: illustrative
+      target: null
+      timeout-ms: null
+      source: |-
+        namespace app
+
+        from /streaky/chromium import browser-options, viewport-options, load-options, screenshot-options, open-page
+
+        function main;
+            browser = instance browser-options;
+            viewport = instance viewport-options;
+            document = open-page; browser, viewport
+            try
+                loading = instance load-options;
+                loading.ready-selector = 'main'
+                html = '<!doctype html><title>Report</title><main><h1>Report</h1></main>'
+                document.set-html; html, loading
+                expression = 'document.title'
+                title = document.evaluate; expression, false
+                capture = instance screenshot-options;
+                image = document.screenshot; capture
+                print; title.scalar, ' (', image.length, ' image bytes)'
+            finally
+                document.close;
+      response: null
+      diagnostic: null
+      markdown: null
+    - type: markdown
+      markdown: |-
+        The example is illustrative because the browser executable and successful headless launch depend on the host. `navigate` loads a URL; `set-html` installs supplied HTML and optionally a base URL. `load-options` may require document assets and either readiness condition; `wait-for-selector` and `wait-for` provide explicit waits. `evaluate` returns a JSON-compatible `document-value`; set `await-promise` true to await a promise. JavaScript exceptions, rejected promises, undefined, and other non-JSON results are errors, not successful null values. Synchronous and promise evaluation waits are bounded by the configured timeout.
+
+        Navigation and HTML readiness stages share a deadline. Awaited evaluation
+        expects a JavaScript expression; wrap multiple statements in an immediately
+        invoked function expression. JavaScript `null` is a successful document
+        `none` value, unlike an undefined or unsupported result. Browser startup
+        and synchronous protocol requests such as screenshot or printing also
+        retain the backend's own transport limits: this setting is not a hard
+        wall-clock deadline for every possible browser failure.
+
+        A supplied HTML `base-url` is inserted through the browser DOM before the
+        active document is installed; it is not a preliminary navigation to fetch
+        that URL. The supplied HTML remains active browser content. PDF disclosure
+        expansion changes the page DOM, so later screenshots observe expanded
+        disclosures unless the caller closes them again.
+  - id: infinite-content
+    title: Lazy loading and infinite scrolling
+    blocks:
+    - type: markdown
+      markdown: |-
+        `screenshot-options.full-page` captures the page's current document extent; it does not exhaust lazy-loaded content or scroll-driven infinite feeds. Prepare the page explicitly with `evaluate` (for example, scroll and wait for content), then wait for a stable application-specific selector or expression before capturing. The library does not provide an infinite-scroll loop or promise that all remotely loaded content has appeared. Illustrative JavaScript expressions depend on the target site and are not a runnable universal algorithm.
+  - id: diagnostics
+    title: Diagnostics and failures
+    blocks:
+    - type: markdown
+      markdown: |-
+        `diagnostics` drains captured events and returns a `document-value` containing page metadata and timing, normalized captured console, JavaScript-error, request, response, and request-failed events, and a `capacity-reached` indicator. It is best-effort bounded event capture, not a complete waterfall, HAR, audit trail, or guarantee of event completeness. Capacity may be reached; no exact loss count is promised. Main HTTP status is available when observed from navigation timing or captured document responses; HTML injection has no HTTP status. HTTP failures do not implicitly make navigation successful or failed based on a status threshold; inspect diagnostics for status.
+
+        Diagnostics and captures can disclose private page data; URLs may contain secrets or query strings, and console/request information may contain sensitive values. Restrict access to and redact exported diagnostics. Cookies are not returned deliberately. The API does not sanitize HTML, isolate network access, or promise SSRF protection. Active HTML, JavaScript, redirects, and browser vulnerabilities can reach host-privileged and internal resources according to the caller's OS, container, and network permissions. Chromium sandboxing is enabled but is not a network policy; callers must provide OS/container/network confinement appropriate to their content. No scheme or destination restriction is provided by this library. Operation timeouts do not impose an overall CPU, memory, or network budget.
+
+        PDF rendering retains its separate `render-pdf` convenience contract and does not change docs-converter's `render-pdf(html,browser,printing)` contract.
+  see-also:
+  - chromium.api.pdf
+  - chromium.tutorial.render-pdf
+  - chromium.guide.introduction
+provenance:
+  specification: []
+  conformance: []
+  compiler: null

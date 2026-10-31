@@ -1,0 +1,338 @@
+namespace tests/chromium
+
+from /core/testing import assert-equal-bool, assert-equal-int, assert-equal-string, test-arguments, skip, fail as test-fail
+from /core/collections import list, range
+from /core/errors import throwable
+from /core/documents import document-value
+from /core/process import exit, make-exit-status
+from /streaky/chromium import browser-options, viewport-options, load-options, screenshot-options, pdf-options, open-page, chromium-error
+
+# The runner's /core/time clock is virtual. Browser deadlines need host time;
+# this test-only native clock avoids changing production timing/environment.
+private function host-milliseconds int64;
+    return rust
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        START.get_or_init(std::time::Instant::now).elapsed().as_millis() as i64
+
+private function browser-for-test browser-options;
+    arguments = test-arguments;
+    if arguments.length < 1 or not arguments[0].is-text
+        skip; 'supply a Chromium executable path as the first --argument'
+    # Test-runner TMPDIR paths can exceed Chromium's Unix socket limit. Re-exec
+    # this same case with a child-only short TMPDIR, preserving controlled argv
+    # and the runner's result channel. Never mutate the library's environment.
+    child-status int32 = rust
+        if cfg!(unix) && std::env::var_os("TERRANE_CHROMIUM_TEST_CHILD").is_none() {
+            std::env::current_exe().and_then(|executable|
+                std::process::Command::new(executable)
+                    .args(std::env::args_os().skip(1))
+                    .env("TMPDIR", "/tmp").env("TERRANE_CHROMIUM_TEST_CHILD", "1")
+                    .status()
+            ).map(|status| status.code().unwrap_or(101)).unwrap_or_else(|error| {
+                eprintln!("could not launch isolated browser test: {error}"); 101
+            })
+        } else { -1 }
+    if child-status >= 0
+        exit; (make-exit-status; child-status)
+    browser = instance browser-options;
+    browser.executable = arguments[0].text
+    browser.timeout-ms = 3000
+    return browser
+
+private function field-value document-value; source ref document-value, name string
+    field = source.field; name
+    return field.value
+
+private function document-length int; source ref document-value
+    return source.length;
+
+# Native fixture only supplies deterministic loopback HTTP responses; browser automation stays on the public library API.
+private function fixture-origin string;
+    origin string = rust
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+        use std::thread;
+        use std::time::{Duration, Instant};
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback fixture");
+        listener.set_nonblocking(true).expect("set fixture nonblocking");
+        let address = listener.local_addr().expect("read fixture address").to_string();
+        thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(8);
+            while Instant::now() < deadline {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+                        let mut request = [0u8; 4096];
+                        let size = stream.read(&mut request).unwrap_or(0);
+                        let request = String::from_utf8_lossy(&request[..size]);
+                        let path = request.lines().next().unwrap_or("");
+                        let (status, body, extra) = if path.starts_with("GET /redirect ") {
+                            ("302 Found", "", "Location: /document\r\n")
+                        } else if path.starts_with("GET /missing ") {
+                            ("404 Not Found", "missing", "")
+                        } else if path.starts_with("GET /document ") {
+                            ("200 OK", "<!doctype html><title>Fixture</title><main id=\"content\">served</main><img src=\"/missing\">", "")
+                        } else {
+                            ("200 OK", "", "")
+                        };
+                        let response = format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\n{extra}Connection: close\r\n\r\n{body}", body.len());
+                        let _ = stream.write_all(response.as_bytes());
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => thread::sleep(Duration::from_millis(10)),
+                    Err(_) => break,
+                }
+            }
+        });
+        address
+    return 'http://' + origin
+
+function test-page-navigation-redirect-status-and-diagnostics throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    origin = fixture-origin;
+    url = origin + '/redirect'
+    page.navigate; url, loading
+    diagnostic = page.diagnostics;
+    final-url = field-value; diagnostic, 'url'
+    assert-equal-string; final-url.scalar, origin + '/document'
+    expression = 'fetch("/missing").then(response=>response.status)'
+    missing-status = page.evaluate; expression, true
+    assert-equal-string; missing-status.scalar, '404'
+    diagnostic = page.diagnostics;
+    status = field-value; diagnostic, 'status'
+    assert-equal-bool; status.scalar == '200', true
+    events = field-value; diagnostic, 'events'
+    missing-response bool = false
+    for index in (range; 0, (document-length; events))
+        item = events.item; index
+        event = item.value
+        kind = field-value; event, 'kind'
+        event-url = field-value; event, 'url'
+        if kind.scalar == 'response' and event-url.scalar == origin + '/missing'
+            response-status = field-value; event, 'status'
+            if response-status.scalar == '404'
+                missing-response = true
+    assert-equal-bool; missing-response, true
+    page.close;
+
+function test-page-html-evaluate-json-promise-and-mutation throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    loading.ready-selector = '#content'
+    html = '<!doctype html><title>Page API</title><main id="content">initial</main>'
+    page.set-html; html, loading
+    expression = '({title:document.title,text:document.querySelector("#content").textContent,count:3})'
+    value = page.evaluate; expression, false
+    assert-equal-string; value.kind, 'map'
+    title = field-value; value, 'title'
+    assert-equal-string; title.scalar, 'Page API'
+    promise = 'Promise.resolve("ready")'
+    resolved = page.evaluate; promise, true
+    assert-equal-string; resolved.scalar, 'ready'
+    expression = 'document.querySelector("#content").textContent="changed"; true'
+    changed = page.evaluate; expression, false
+    assert-equal-string; changed.scalar, 'true'
+    page.close;
+
+function test-page-evaluate-failures-and-bounded-waits throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    html = '<!doctype html><p>ready</p>'
+    page.set-html; html, loading
+    for expression in (list; '(()=>{throw new Error("expected")})()', 'undefined', '1n', 'Promise.reject(new Error("expected rejection"))', 'new Promise(()=>{})', '(()=>{while(true){}})()')
+        started = host-milliseconds;
+        failed bool = false
+        try
+            page.evaluate; expression, true
+        catch chromium-error
+            failed = true
+        assert-equal-bool; failed, true
+        finished = host-milliseconds;
+        assert-equal-bool; finished - started < 15000, true
+    selector = '#does-not-exist'
+    failed = false
+    try
+        page.wait-for-selector; selector
+    catch chromium-error
+        failed = true
+    assert-equal-bool; failed, true
+    page.close;
+
+private function png-dimension int; image ref bytes, offset int
+    dimension int = 0
+    for index in (range; offset, offset + 4)
+        octet int = image[index]
+        dimension = dimension * 256 + octet
+    return dimension
+
+function test-page-viewport-fullpage-and-script-screenshot throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    viewport.width = 320
+    viewport.height = 240
+    viewport.device-scale-factor = 2.0
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    html = '<!doctype html><style>body{margin:0}#large{height:800px;background:#f00}</style><div id="large"></div>'
+    page.set-html; html, loading
+    options = instance screenshot-options;
+    image = page.screenshot; options
+    assert-equal-int; (png-dimension; image, 16), 640
+    assert-equal-int; (png-dimension; image, 20), 480
+    options.full-page = true
+    tall-image = page.screenshot; options
+    assert-equal-int; (png-dimension; tall-image, 20), 1600
+    expression = 'document.querySelector("#large").style.background="rgb(0, 255, 0)"'
+    _ = page.evaluate; expression, false
+    manipulated = page.screenshot; options
+    assert-equal-bool; manipulated != tall-image, true
+    page.close;
+
+function test-page-diagnostics-record-script-errors throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    html = '<!doctype html><title>Diagnostics</title><script>console.warn("visible warning");setTimeout(()=>{throw new Error("visible script error")},0)</script>'
+    page.set-html; html, loading
+    expression = 'new Promise(resolve=>setTimeout(()=>resolve(true),50))'
+    started = host-milliseconds;
+    saw-console bool = false
+    saw-javascript-error bool = false
+    # Event delivery is asynchronous; drain bounded snapshots until both actual
+    # messages arrive or the deadline expires, rather than guessing a sleep.
+    while not saw-console or not saw-javascript-error
+        diagnostic = page.diagnostics;
+        events = field-value; diagnostic, 'events'
+        for index in (range; 0, (document-length; events))
+            item = events.item; index
+            event = item.value
+            kind = field-value; event, 'kind'
+            message = field-value; event, 'message'
+            if kind.scalar == 'console' and (message.scalar.contains; 'visible warning')
+                saw-console = true
+            if kind.scalar == 'javascript-error' and (message.scalar.contains; 'visible script error')
+                saw-javascript-error = true
+        finished = host-milliseconds;
+        if finished - started >= 5000 and (not saw-console or not saw-javascript-error)
+            test-fail; 'console/script-error events were not observed; last snapshot: ' + diagnostic.encoded
+        if not saw-console or not saw-javascript-error
+            _ = page.evaluate; expression, true
+    assert-equal-bool; saw-console, true
+    assert-equal-bool; saw-javascript-error, true
+    page.close;
+
+private function custom-paper-metadata string; pdf ref bytes
+    result string = rust
+        use std::process::Command;
+        let path = std::env::temp_dir().join(format!(
+            "terrane-chromium-page-{}.pdf",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
+        ));
+        std::fs::write(&path, pdf).expect("write temporary page PDF");
+        let info = Command::new("pdfinfo").arg(&path).output();
+        let _ = std::fs::remove_file(&path);
+        match info {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "unavailable".to_string(),
+            Ok(output) if output.status.success() => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let size = text.lines().find(|line| line.starts_with("Page size:"));
+                match size {
+                    Some(line) => {
+                        let numbers: Vec<f64> = line.split_whitespace()
+                            .filter_map(|part| part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').parse().ok())
+                            .collect();
+                        if numbers.len() >= 2 && numbers[0] > 500.0 && numbers[0] < 520.0
+                            && numbers[1] > 330.0 && numbers[1] < 350.0 {
+                            "custom-landscape".to_string()
+                        } else { "unexpected-size".to_string() }
+                    }
+                    None => "missing-page-size".to_string(),
+                }
+            }
+            _ => "pdfinfo-failed".to_string(),
+        }
+    return result
+
+private function custom-margin-metadata string; pdf ref bytes
+    result string = rust
+        use std::process::Command;
+        let path = std::env::temp_dir().join(format!(
+            "terrane-chromium-margin-{}.pdf",
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
+        ));
+        std::fs::write(&path, pdf).expect("write temporary page PDF");
+        let output = Command::new("pdftotext").arg("-bbox").arg(&path).arg("-").output();
+        let _ = std::fs::remove_file(&path);
+        match output {
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "unavailable".to_string(),
+            Ok(output) if output.status.success() => {
+                let text = String::from_utf8_lossy(&output.stdout);
+                let word = text.split("<word ").nth(1).unwrap_or("");
+                let attribute = |name: &str| -> Option<f64> {
+                    let value = word.split_once(name)?.1.split_once('"')?.1.split_once('"')?.0;
+                    value.parse().ok()
+                };
+                match (attribute("xMin="), attribute("yMin=")) {
+                    (Some(x), Some(y)) if x > 20.0 && x < 38.0 && y > 14.0 && y < 32.0 =>
+                        "custom-margins".to_string(),
+                    _ => "unexpected-margins".to_string(),
+                }
+            }
+            _ => "pdftotext-failed".to_string(),
+        }
+    return result
+
+function test-page-pdf-custom-paper-prints-bytes throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    html = '<!doctype html><title>PDF fixture</title><style>html,body,p{margin:0}</style><p>printable page</p>'
+    page.set-html; html, loading
+    printing = instance pdf-options;
+    printing.paper-width-mm = 120.0
+    printing.paper-height-mm = 180.0
+    printing.landscape = true
+    printing.margin-top-mm = 8.0
+    printing.margin-bottom-mm = 8.0
+    printing.margin-left-mm = 10.0
+    printing.margin-right-mm = 10.0
+    printing.prefer-css-page-size = false
+    output = page.print-pdf; printing
+    page.close;
+    metadata = custom-paper-metadata; output
+    if metadata != 'unavailable'
+        assert-equal-string; metadata, 'custom-landscape'
+    margins = custom-margin-metadata; output
+    if margins != 'unavailable'
+        assert-equal-string; margins, 'custom-margins'
+    if metadata == 'unavailable' and margins == 'unavailable'
+        skip; 'pdfinfo and pdftotext are unavailable'
+
+function test-page-close-is-idempotent-and-typed throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    page.close;
+    page.close;
+    assert-equal-bool; (page.is-open;), false
+    failed bool = false
+    expression = '1'
+    try
+        _ = page.evaluate; expression, false
+    catch chromium-error
+        failed = true
+    assert-equal-bool; failed, true

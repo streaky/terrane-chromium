@@ -21,9 +21,10 @@ documentation:
   blocks:
   - type: markdown
     markdown: |-
-      Import public declarations from `/streaky/chromium`. Rendering is synchronous
-      and one-shot: each call launches its own browser rather than sharing a
-      caller-visible session.
+      `render-pdf` is a one-shot convenience operation; it does not replace the
+      managed page API. Its HTML/browser/printing argument shape remains stable
+      for consumers such as docs-converter. The page reference documents reusable
+      navigation, evaluation, screenshot, printing, and diagnostics operations.
   sections:
   - id: browser-discovery
     title: Browser discovery and selection
@@ -35,12 +36,14 @@ documentation:
         platform search locations. Discovery does not launch, download, or prove
         that a browser can start successfully.
 
-        `browser-options` has one field: `executable string|none = none`. Supply an
-        executable path to bypass discovery; `none` selects automatic discovery at
+        `browser-options.executable string|none = none` selects the browser.
+        Supply a path to bypass discovery; `none` selects automatic discovery at
         render time. An invalid explicit executable raises `chromium-error` rather
         than falling back to a different browser. Set `CHROME` in the process
         environment before launching the consumer when using environment-based
         selection.
+        `timeout-ms` defaults to 30000 and `diagnostic-capacity` to 1000; see
+        [[chromium.api.page#configuration]] for all browser and page options.
   - id: render-pdf
     title: Render supplied HTML
     blocks:
@@ -69,17 +72,20 @@ documentation:
         whole-document Markdown intermediary. The browser/tab lifetime remains
         inside the call; native handles are not returned.
 
-        The current API does not expose page ranges, margin settings, custom header
-        or footer templates, browser launch flags, or a caller-selected base URL.
-        Use CSS print styles for document layout where Chromium supports them.
+        Paper sizes, dimensions, margins, orientation, scale, and page ranges are
+        configured through `pdf-options`; see [[chromium.api.page#configuration]].
+        Custom header/footer templates and browser launch flags are not exposed.
+        A caller-selected HTML base URL is available through the managed page API.
   - id: print-options
     title: PDF options
     blocks:
     - type: markdown
       markdown: |-
-        Construct `pdf-options` with no arguments and assign fields before calling
-        `render-pdf`. All fields are booleans and default to `false`; the package
-        does not silently apply docs-converter's document-specific print policy.
+        Construct `pdf-options` with no arguments and assign fields as needed.
+        `display-header-footer`, `print-background`, `prefer-css-page-size`, and
+        `expand-disclosures` default to `false`. Other fields describe optional
+        paper dimensions, margins, scale, and page ranges; `landscape` defaults
+        to `false`. The package does not apply docs-converter-specific policy.
     - type: table
       id: option-fields
       title: pdf-options fields
@@ -161,13 +167,14 @@ documentation:
         not a network-access policy. Absolute URLs may cause browser network
         requests according to the supplied content and host environment.
 
-        Relative asset URLs have no caller-selected base URL. Prefer self-contained
-        HTML and embedded image data, or deliberately absolute URLs. Required fonts
-        must be available to the browser. Image decoding and font readiness do not
-        establish a general application-ready condition for arbitrary JavaScript;
-        the API provides no custom wait predicate or caller-configurable timeout.
-        Use print CSS for pagination and code wrapping; those are document policy,
-        not transformations performed by this library.
+        Relative asset URLs have no caller-selected base URL for this convenience
+        function. Prefer self-contained HTML or embedded image data. Required fonts
+        must be available to the browser. Asset readiness does not establish a
+        general application-ready condition for arbitrary JavaScript. For
+        caller-selected HTML base URLs, readiness selectors/expressions, and
+        timeouts, use the managed page API in [[chromium.api.page]]. Use print CSS
+        for pagination and code wrapping; those are document policy, not
+        transformations performed by this library.
   see-also:
   - chromium.guide.introduction
   - chromium.tutorial.render-pdf

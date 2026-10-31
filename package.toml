@@ -7,17 +7,36 @@ rust-toolchain = "pinned"
 
 [rust-modules]
 chromium_backend = "rust/backend.rs"
+chromium_events = "rust/events.rs"
 
 [rust-dependencies.headless-chrome]
 package = "headless_chrome"
 version = "=1.0.22"
 effects = ["filesystem", "process", "threads", "networking", "build"]
 
+[rust-dependencies.crossbeam-channel]
+version = "=0.5.17"
+effects = ["threads"]
+
+[rust-dependencies.serde-json]
+package = "serde_json"
+version = "=1.0.154"
+effects = ["build"]
+
+[rust-dependencies.tungstenite]
+version = "=0.29.0"
+effects = ["networking", "threads", "build"]
+
 [profile]
 capabilities = ["filesystem", "process", "threads", "networking", "build"]
 
 [testing]
 unit = "tests/unit"
+integration = "tests/integration"
+
+[testing.profile]
+name = "chromium-tests"
+capabilities = ["filesystem", "process", "threads", "networking", "build", "clocks"]
 
 [rust-dependencies.tempfile]
 version = "=3.27.0"
