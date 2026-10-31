@@ -9,7 +9,7 @@ The [Terrane manual IR publication](docs/src/manual.yaml) follows the same `docs
 From this package directory in a Terrane checkout, render it with docs-converter:
 
 ```text
-../../target/release/terrane run ../../projects/docs-converter -- html docs/src /tmp/chromium-manual.html
+terrane run ../../projects/docs-converter -- html docs/src /tmp/chromium-manual.html
 ```
 
 Use `markdown` or `json` instead of `html` for the other reference-publication outputs. The YAML records are the authored documentation sources.
@@ -60,16 +60,16 @@ Rendering installs the supplied HTML DOM directly, waits for embedded images to 
 
 Public types belong to `streaky/chromium`, not to its Rust backend. The current one-shot operation owns and closes its browser/tab lifetime before returning, and exposes no native handles. A future reusable session or another Chromium operation can be added alongside this convenience function without changing its byte-returning contract. No session, screenshot, navigation, arbitrary-script, browser-download, or sandbox-disable API is implemented or promised here.
 
-A narrow maintained Rust module owns the current `Arc<Tab>` integration boundary. It borrows source inputs and makes the one HTML copy required by the owning CDP document-content request. Output data crosses back to Terrane as bytes; document structure and output delivery stay with callers.
+A narrow maintained [Rust module](rust/backend.rs) owns the current browser integration boundary because configured browser construction and operations through its opaque `Arc<Tab>` are not admitted by Terrane projection. It is not retained to avoid small, short-lived clones. Comments in that file explain each operation, distinguish policy from projection gaps, and state the removal criterion. The small native path-to-text discovery conversion lives directly in a Terrane `rust` block. See the manual's [native-boundary accounting](docs/src/records/guides/introduction.yaml) for the current gaps. Document structure and output delivery stay with callers.
 
 The backend is pinned to `headless_chrome` 1.0.22. [Upstream documentation](https://github.com/rust-headless-chrome/rust-headless-chrome) describes its installed-browser discovery and Chromium integration; those native types are not part of this package's public API.
 
 ## Development
 
-From a compiler checkout, use a current release Terrane executable:
+With `terrane` available on `PATH`, run from this package directory:
 
 ```text
-../../target/release/terrane check .
+terrane check .
 ../../target/release/terrane test .
 ```
 

@@ -84,6 +84,37 @@ documentation:
         public session, screenshot, navigation, arbitrary-script, browser-download,
         or sandbox-disable API. The private backend uses `headless_chrome` 1.0.22;
         its native types are not part of the package's public contract.
+  - id: native-boundary
+    title: Current native-boundary accounting
+    blocks:
+    - type: markdown
+      markdown: |-
+        The maintained `rust/backend.rs` exists for current projection gaps, not
+        to avoid small, short-lived clones. Its comments identify each native
+        operation and distinguish package behavior from missing source capability.
+        These are implementation limitations, not intended permanent API boundaries.
+
+        - `chromium/projection-launch-options`: `Browser::new` takes lifetime-bearing
+          `LaunchOptions`; projection declines that input. Source construction
+          reports `T0117`. Remove the native construction when a configured browser
+          can be created through admitted source calls.
+        - `chromium/projection-arc-tab`: `new_tab` returns an opaque `Arc<Tab>`;
+          calling `print_to_pdf` through that handle reports `T0055`. Remove the
+          native operation when CDP requests and their associated responses,
+          evaluation, and printing work through the returned handle in source,
+          preserving the browser/tab lifetime.
+        - `chromium/projection-path-text`: discovery returns a `PathBuf` without a
+          projected `to_string_lossy` member (`T0055`). This small conversion is
+          inline in `src/pdf.trn`, not a separate Rust helper. Remove it when
+          discovery and native path text conversion can compose in source.
+
+        The remaining browser calls share one native scope so browser and tab
+        cleanup occurs on success and failure. Moving those calls into separate
+        inline Rust blocks would not close the gaps. Disclosure expansion and
+        readiness waiting are package behavior; their native placement follows
+        from the opaque tab receiver, not a distinct language limitation.
+        Likewise, the owned HTML copy required by the CDP request and local Rust
+        error normalization are not reasons to retain this boundary.
   see-also:
   - chromium.tutorial.render-pdf
   - chromium.api.pdf

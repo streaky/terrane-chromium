@@ -25,13 +25,21 @@ private class pdf-outcome
     error string = ''
 
 public function find-executable string|none;
+    # chromium/projection-path-text: discovery returns a native PathBuf without
+    # a projected to_string_lossy member. Keep this small conversion inline;
+    # remove it when discovery and native path text conversion project together.
     detected string = rust
-        crate::chromium_backend::find_executable().unwrap_or_default()
+        headless_chrome::browser::default_executable()
+            .ok()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
     if detected == ''
         return none
     return detected
 
 public function render-pdf bytes throws chromium-error; html ref string, browser ref browser-options, printing ref pdf-options
+    # Native launch and Arc<Tab> member gaps are documented in rust/backend.rs.
+    # This block only translates the native result into the package's typed error.
     outcome pdf-outcome = rust
         match crate::chromium_backend::render_pdf(
             html,
