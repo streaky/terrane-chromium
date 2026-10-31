@@ -1,0 +1,17 @@
+format: 1
+publication:
+  id: chromium
+  kind: reference
+imports: []
+title: streaky/chromium
+landing: chromium.guide.introduction
+navigation:
+- group: Start here
+  numbering: none
+  children:
+  - source: records/guides/introduction.yaml
+  - source: records/tutorials/render-pdf.yaml
+- group: Reference
+  numbering: none
+  children:
+  - source: records/api/pdf.yaml

@@ -2,6 +2,18 @@
 
 A Terrane library for Chromium-backed operations. Its current surface is deliberately small: installed-browser discovery and HTML-to-PDF rendering. It extracts the browser boundary previously owned by docs-converter, without introducing a second document renderer or a general browser-automation API.
 
+## Manual
+
+The [Terrane manual IR publication](docs/src/manual.yaml) follows the same `docs/src/` layout as dbkit. It contains an [introduction and runtime setup](docs/src/records/guides/introduction.yaml), a [complete render-and-save tutorial](docs/src/records/tutorials/render-pdf.yaml), and the [public API reference](docs/src/records/api/pdf.yaml), including options, errors, asset handling, and security boundaries.
+
+From this package directory in a Terrane checkout, render it with docs-converter:
+
+```text
+../../target/release/terrane run ../../projects/docs-converter -- html docs/src /tmp/chromium-manual.html
+```
+
+Use `markdown` or `json` instead of `html` for the other reference-publication outputs. The YAML records are the authored documentation sources.
+
 ## Dependency
 
 ```toml

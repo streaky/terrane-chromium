@@ -1,0 +1,93 @@
+format: 1
+id: chromium.guide.introduction
+kind: topic
+surface: null
+lifecycle:
+  status: current
+  stability: experimental
+  since: unversioned
+  deprecated-since: null
+  removed-in: null
+  replacement: null
+documentation:
+  status: complete
+  title: streaky/chromium
+  title-style: text
+  summary: Installed-browser discovery and direct HTML-to-PDF rendering for Terrane applications.
+  tags:
+  - chromium
+  - pdf
+  blocks:
+  - type: markdown
+    markdown: |-
+      `streaky/chromium` renders supplied HTML through Chromium's print engine and
+      returns PDF bytes. It also discovers installed Chromium/Chrome executables.
+      It is a one-shot browser operation, not a document renderer: callers supply
+      HTML and own storage, uploads, and document-specific print policy.
+
+      Start with [[chromium.tutorial.render-pdf]] for a complete application.
+      [[chromium.api.pdf]] documents every public function, option, and error.
+  - type: example
+    id: package-manifest
+    title: Consumer package.toml
+    language: toml
+    mode: illustrative
+    target: null
+    timeout-ms: null
+    source: |-
+      package = "chromium-report"
+      rust-toolchain = "pinned"
+
+      [namespaces]
+      app = "src"
+
+      [profile]
+      capabilities = ["build", "filesystem", "process", "threads", "networking"]
+
+      [terrane-dependencies.streaky.chromium]
+      path = "../chromium"
+    response: null
+    diagnostic: null
+    markdown: null
+  - type: markdown
+    markdown: |-
+      Resolve the dependency path relative to the consumer's `package.toml`;
+      replace `../chromium` with the location of this library. The example assumes
+      a sibling checkout. There is no helper executable or manual bootstrap step.
+      The declared capabilities admit the package's native browser dependency.
+  sections:
+  - id: runtime
+    title: Runtime prerequisites
+    blocks:
+    - type: markdown
+      markdown: |-
+        Install Chromium or Chrome separately. The library does not download a
+        browser. Set `CHROME` to its executable path when automatic discovery is
+        insufficient, or supply `browser-options.executable` explicitly. See
+        [[chromium.api.pdf#browser-discovery]] for selection behavior.
+
+        The browser runs headless with its sandbox enabled and a temporary private
+        profile. The host must permit sandboxed Chromium to launch. No
+        sandbox-disable option is exposed. On Unix, keep `TMPDIR` short enough for
+        Chromium's Unix-domain socket paths; the usual `/tmp` works.
+
+        PDF rendering uses installed fonts and Chromium's CSS print support. Package
+        checking and the missing-executable unit test do not require a working
+        browser, but successful rendering does.
+  - id: scope
+    title: Current scope
+    blocks:
+    - type: markdown
+      markdown: |-
+        The public API contains Terrane-owned types only. Native browser and tab
+        handles remain private and are closed when the operation ends. There is no
+        public session, screenshot, navigation, arbitrary-script, browser-download,
+        or sandbox-disable API. The private backend uses `headless_chrome` 1.0.22;
+        its native types are not part of the package's public contract.
+  see-also:
+  - chromium.tutorial.render-pdf
+  - chromium.api.pdf
+provenance:
+  specification: []
+  conformance: []
+  compiler: null

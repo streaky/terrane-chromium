@@ -1,0 +1,96 @@
+format: 1
+id: chromium.tutorial.render-pdf
+kind: topic
+surface: null
+lifecycle:
+  status: current
+  stability: experimental
+  since: unversioned
+  deprecated-since: null
+  removed-in: null
+  replacement: null
+documentation:
+  status: complete
+  title: Render and save a PDF
+  title-style: text
+  summary: Build a complete HTML-to-PDF application with caller-owned atomic output delivery.
+  tags:
+  - chromium
+  - pdf
+  blocks:
+  - type: markdown
+    markdown: |-
+      Create a consumer package using the manifest in
+      [[chromium.guide.introduction#package-manifest]], then save this application
+      as `src/main.trn`. Install Chromium/Chrome and configure `CHROME` if needed.
+      Run the application from a directory where it may write `report.pdf`.
+      The HTML is self-contained; no remote resources are required.
+  - type: example
+    id: complete-application
+    title: Complete application
+    language: terrane
+    mode: illustrative
+    target: null
+    timeout-ms: null
+    source: |-
+      namespace app
+
+      from /streaky/chromium import browser-options, pdf-options, render-pdf
+      from /core/filesystem import filesystem-capability, filesystem-write-atomic
+      from /core/filesystem/paths import path
+      from /core/process import exit, make-exit-status
+      from /core/streams import stderr
+
+      function main;
+          browser = instance browser-options;
+          printing = instance pdf-options;
+          printing.print-background = true
+          printing.prefer-css-page-size = true
+          html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Report</title><style>@page { size: A4; margin: 20mm } body { font-family: sans-serif } pre { white-space: pre-wrap }</style></head><body><h1>Report</h1><p>Rendered directly from HTML.</p><pre>literal `backticks` stay code</pre><details><summary>Notes</summary><p>Optional details.</p></details></body></html>'
+          data = render-pdf; html, browser, printing
+          written = filesystem-write-atomic; (filesystem-capability;), (instance path; 'report.pdf'), move data
+          if written.failed
+              errors = stderr;
+              errors.write-all; ((written.message + '\n').encode; utf8)
+              exit; (make-exit-status; 1)
+              return
+          print; 'Wrote report.pdf'
+    response: null
+    diagnostic: null
+    markdown: null
+  - type: markdown
+    markdown: |-
+      The application enables background printing and CSS page-size preference,
+      then writes the returned bytes atomically. `render-pdf` itself never writes
+      an output file. A rendering error occurs before the write call; filesystem
+      failure is reported separately by the write result.
+
+      The closed Notes disclosure stays closed because `expand-disclosures`
+      defaults to `false`. Set it to `true` before rendering to print its contents.
+      Authored code remains HTML `pre` content: the library never converts the
+      whole document through Markdown.
+  - type: example
+    id: run-application
+    title: Run from the consumer package directory
+    language: text
+    mode: illustrative
+    target: null
+    timeout-ms: null
+    source: terrane run .
+    response: null
+    diagnostic: null
+    markdown: null
+  - type: markdown
+    markdown: |-
+      On success the application prints `Wrote report.pdf` and creates the PDF in
+      the working directory. Inspect its Report heading, normal paragraph, and
+      monospaced code line. Fonts and detailed pagination depend on the installed
+      browser and fonts; a fixed byte-for-byte PDF is not promised.
+  sections: []
+  see-also:
+  - chromium.api.pdf
+  - chromium.guide.introduction
+provenance:
+  specification: []
+  conformance: []
+  compiler: null
