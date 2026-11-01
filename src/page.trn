@@ -3,7 +3,9 @@ namespace streaky/chromium
 from /core/documents import document-value
 from /core/documents/json import parse-json, default-json-options
 from /core/codecs import decode-base64
+from /core/errors import dependency-error
 from /deps/headless-chrome import Browser as native-browser
+from /deps/headless-chrome import Arc-of-headless-chrome-Tab as native-tab
 from /deps/crossbeam-channel import Receiver as native-event-receiver
 
 public class viewport-options
@@ -24,8 +26,8 @@ public class screenshot-options
 
 private class page-state
     browser native-browser|none = none
+    tab native-tab|none = none
     events (native-event-receiver of string)|none = none
-    target-id string = ''
     timeout-ms int = 30000
     injected-html bool = true
     error string = ''
@@ -166,13 +168,15 @@ public class page
             return
         message = page-close; this.state
         this.state.events = none
+        this.state.tab = none
         this.state.browser = none
         finish-operation; move message
 
     function destruct;
-        # Source owns the browser and event receiver. Native Drop cleans up on
-        # errors/scope exit; explicit close additionally reports CDP close errors.
+        # Source owns the browser, tab and event receiver. Native Drop cleans up
+        # on errors/scope exit; explicit close additionally reports CDP errors.
         this.state.events = none
+        this.state.tab = none
         this.state.browser = none
 
 public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
@@ -182,7 +186,7 @@ public function open-page shared ref page; browser ref browser-options, viewport
     if browser.diagnostic-capacity <= 0 or browser.diagnostic-capacity > 2147483647
         throw chromium-error; 'diagnostic capacity must be a positive 32-bit count'
     # chromium/projection-launch-options: native construction is unavailable.
-    # Transfer Browser/Receiver into source-owned slots, not a global registry.
+    # Transfer Browser, Arc<Tab> and Receiver into source-owned slots, not a global registry.
     state page-state = rust
         match crate::chromium_backend::open_page(
             browser.executable.as_deref(),
@@ -192,11 +196,11 @@ public function open-page shared ref page; browser ref browser-options, viewport
             viewport.device_scale_factor,
             browser.diagnostic_capacity.to_string().parse::<usize>().expect("validated capacity"),
         ) {
-            Ok((owner, events, target_id)) => {
+            Ok((owner, tab, events)) => {
                 let mut state = PageState::terrane_construct();
                 state.browser = Some(owner);
+                state.tab = Some(tab);
                 state.events = Some(events);
-                state.target_id = target_id;
                 state
             },
             Err(error) => {
@@ -209,46 +213,46 @@ public function open-page shared ref page; browser ref browser-options, viewport
     state.timeout-ms = browser.timeout-ms
     return shared ref (instance page; move state)
 
-# The following blocks adapt source-owned fields/results to the documented
-# native Arc<Tab>/generic-CDP boundary. No public native handles escape. Ordinary
-# validation, units, lifecycle and policy live above in Terrane; remove these
-# blocks with that boundary when the required projected operations are admitted.
+# The following blocks adapt source-owned values to CDP operations whose native
+# request/response contracts are not yet expressible as ordinary source calls.
+# The retained tab and browser lifetime owner remain source state; validation,
+# units, lifecycle and policy live above in Terrane.
 
 private function page-navigate; state ref page-state, url ref string, loading ref load-options
     require-page; state
     message string = rust
-        crate::chromium_backend::navigate(state.browser.as_ref().expect("checked open page"), &state.target_id, url, loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+        crate::chromium_backend::navigate(state.tab.as_ref().expect("checked open page"), url, loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
     finish-operation; move message
 
 private function page-set-html; state ref page-state, html ref string, loading ref load-options
     require-page; state
     message string = rust
-        crate::chromium_backend::set_html(state.browser.as_ref().expect("checked open page"), &state.target_id, html, loading.base_url.as_deref(), loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+        crate::chromium_backend::set_html(state.tab.as_ref().expect("checked open page"), html, loading.base_url.as_deref(), loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
     finish-operation; move message
 
 private function page-set-viewport; state ref page-state, viewport ref viewport-options
     require-page; state
     validate-viewport; viewport
     message string = rust
-        crate::chromium_backend::set_viewport(state.browser.as_ref().expect("checked open page"), &state.target_id, viewport.width.to_string().parse::<u32>().expect("validated width"), viewport.height.to_string().parse::<u32>().expect("validated height"), viewport.device_scale_factor).err().unwrap_or_default()
+        crate::chromium_backend::set_viewport(state.tab.as_ref().expect("checked open page"), viewport.width.to_string().parse::<u32>().expect("validated width"), viewport.height.to_string().parse::<u32>().expect("validated height"), viewport.device_scale_factor).err().unwrap_or_default()
     finish-operation; move message
 
 private function page-wait-selector; state ref page-state, selector ref string
     require-page; state
     message string = rust
-        crate::chromium_backend::wait_for_selector(state.browser.as_ref().expect("checked open page"), &state.target_id, selector, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+        crate::chromium_backend::wait_for_selector(state.tab.as_ref().expect("checked open page"), selector, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
     finish-operation; move message
 
 private function page-wait; state ref page-state, expression ref string
     require-page; state
     message string = rust
-        crate::chromium_backend::wait_for(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
+        crate::chromium_backend::wait_for(state.tab.as_ref().expect("checked open page"), expression, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
     finish-operation; move message
 
 private function page-evaluate document-value; state ref page-state, expression ref string, await-promise bool
     require-page; state
     outcome operation-outcome = rust
-        match crate::chromium_backend::evaluate(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, await_promise, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
+        match crate::chromium_backend::evaluate(state.tab.as_ref().expect("checked open page"), expression, await_promise, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
             Ok(value) => OperationOutcome { value, error: String::new() },
             Err(error) => OperationOutcome { value: String::new(), error },
         }
@@ -264,7 +268,7 @@ private function page-screenshot bytes; state ref page-state, options ref screen
             throw chromium-error; 'quality is only valid for JPEG and must be between 0 and 100'
     # CDP returns base64; decoding is an ordinary source codec operation.
     outcome operation-outcome = rust
-        match crate::chromium_backend::screenshot(state.browser.as_ref().expect("checked open page"), &state.target_id, &options.format,
+        match crate::chromium_backend::screenshot(state.tab.as_ref().expect("checked open page"), &options.format,
             options.quality.as_ref().map(|quality| quality.to_string().parse::<u32>().expect("validated quality")),
             options.full_page) {
             Ok(value) => OperationOutcome { value, error: String::new() },
@@ -285,7 +289,7 @@ private function page-print bytes; state ref page-state, printing ref pdf-option
     left = millimetres-to-inches; printing.margin-left-mm
     right = millimetres-to-inches; printing.margin-right-mm
     outcome binary-outcome = rust
-        match crate::chromium_backend::print_pdf(state.browser.as_ref().expect("checked open page"), &state.target_id,
+        match crate::chromium_backend::print_pdf(state.tab.as_ref().expect("checked open page"),
             printing.display_header_footer, printing.print_background,
             printing.prefer_css_page_size, printing.expand_disclosures,
             dimensions.width, dimensions.height, printing.landscape,
@@ -300,15 +304,19 @@ private function page-print bytes; state ref page-state, printing ref pdf-option
 private function page-diagnostics document-value; state ref page-state
     require-page; state
     outcome operation-outcome = rust
-        match crate::chromium_backend::diagnostics(state.browser.as_ref().expect("checked open page"), &state.target_id, state.events.as_ref().expect("open page events"), state.injected_html, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
+        match crate::chromium_backend::diagnostics(state.tab.as_ref().expect("checked open page"), state.events.as_ref().expect("open page events"), state.injected_html, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
             Ok(value) => OperationOutcome { value, error: String::new() },
             Err(error) => OperationOutcome { value: String::new(), error },
         }
     return decode-page-document; move outcome
 
 private function page-close string; state ref page-state
-    # Closing uses the same unprojectable native tab handle; source releases its
-    # owner slots even if close reports an error. Browser Drop is the backstop.
-    message string = rust
-        crate::chromium_backend::close(state.browser.as_ref().expect("checked open page"), &state.target_id).err().unwrap_or_default()
-    return move message
+    # Preserve source-owned cleanup in page.close, using the projected receiver
+    # and throwable boundary rather than a package-local native adapter.
+    tab = state.tab
+    if tab != none
+        try
+            tab.close; false
+        catch dependency-error as error
+            return error.message
+    return ''

@@ -1,16 +1,17 @@
 //! Native CDP adapters for the source-owned page lifecycle.
 //!
 //! The source language currently cannot project `Browser::new(LaunchOptions<'_>)`
-//! because the launch options carry a lifetime, cannot operate on the opaque
-//! `Arc<Tab>` returned by `Browser::get_tabs`, and cannot express generic CDP
+//! because launch options carry a lifetime, and cannot express generic CDP
 //! methods with their associated response types or native event callbacks.
 //! These adapters keep those concrete interop gaps local; validation, units,
-//! defaults, persistence and policy remain in the package source.
+//! defaults, persistence and policy remain in the package source. The source
+//! retains the `Arc<Tab>` returned by `Browser::new_tab`; this module borrows it
+//! directly rather than rediscovering it through the browser's tab registry.
 //!
-//! Remove this module when source can construct configured browsers, retain and
-//! identify native tabs, send typed CDP requests/read responses, and register
-//! bounded event callbacks with correct lifetimes. Convenience such as asset
-//! readiness and disclosure expansion is package behavior, not itself a gap.
+//! Remove this module when source can construct configured browsers and express
+//! typed CDP requests/responses and bounded event callbacks with correct
+//! lifetimes. Convenience such as asset readiness and disclosure expansion is
+//! package behavior, not itself a gap.
 
 use crossbeam_channel::Receiver;
 use headless_chrome::{
@@ -23,19 +24,6 @@ use std::{
     sync::Arc,
     time::{Duration, Instant},
 };
-
-// The source owns Browser. Borrow it and briefly clone the matching Arc so tab
-// lifetime is stable across each CDP operation; this small clone is expected.
-fn tab(browser: &Browser, target: &str) -> Result<Arc<headless_chrome::browser::tab::Tab>, String> {
-    browser
-        .get_tabs()
-        .lock()
-        .map_err(|e| e.to_string())?
-        .iter()
-        .find(|tab| tab.get_target_id().as_str() == target)
-        .cloned()
-        .ok_or_else(|| format!("page target {target} is no longer open"))
-}
 
 fn remaining_ms(deadline: Instant) -> Result<u64, String> {
     let remaining = deadline.saturating_duration_since(Instant::now());
@@ -54,7 +42,7 @@ pub fn open_page(
     height: u32,
     device_scale: f64,
     diagnostic_capacity: usize,
-) -> Result<(Browser, Receiver<String>, String), String> {
+) -> Result<(Browser, Arc<headless_chrome::browser::tab::Tab>, Receiver<String>), String> {
     let path = match executable {
         Some(path) => PathBuf::from(path),
         None => headless_chrome::browser::default_executable()
@@ -65,33 +53,31 @@ pub fn open_page(
         .build()
         .map_err(|e| e.to_string())?;
     let browser = Browser::new(options).map_err(|e| format!("could not start Chromium: {e}"))?;
-    // Start on a fresh about:blank target, not Chrome's privileged new-tab page,
-    // whose CSP would silently prevent scripts in subsequently installed HTML.
+    // Start on a fresh tab instead of Chrome's privileged new-tab page: its
+    // content security policy would silently block scripts in installed HTML.
     let tab = browser.new_tab().map_err(|e| e.to_string())?;
     tab.set_default_timeout(Duration::from_millis(timeout_ms));
-    set_viewport(&browser, tab.get_target_id(), width, height, device_scale)?;
+    set_viewport(&tab, width, height, device_scale)?;
     let receiver = crate::chromium_events::capture(
         &browser.get_ws_url(),
         tab.get_target_id(),
         diagnostic_capacity,
         timeout_ms,
     )?;
-    Ok((browser, receiver, tab.get_target_id().to_string()))
+    Ok((browser, tab, receiver))
 }
 
-// Navigation and DOM installation require the opaque tab's native CDP methods.
+// Navigation and DOM installation require request-dependent CDP response types.
 // The readiness stages share a deadline. Browser startup and CDP transport RPCs
 // also have their own upstream limits; this is not a hard resource sandbox.
 pub fn navigate(
-    browser: &Browser,
-    target: &str,
+    t: &headless_chrome::browser::tab::Tab,
     url: &str,
     wait_assets: bool,
     selector: Option<&str>,
     predicate: Option<&str>,
     timeout_ms: u64,
 ) -> Result<(), String> {
-    let t = tab(browser, target)?;
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     // Observe loader identity and document readiness instead of network idle.
     // The upstream event parser is incompatible with Terrane's exact-number JSON
@@ -134,8 +120,7 @@ pub fn navigate(
 }
 
 pub fn set_html(
-    browser: &Browser,
-    target: &str,
+    t: &headless_chrome::browser::tab::Tab,
     html: &str,
     base_url: Option<&str>,
     wait_assets: bool,
@@ -143,7 +128,6 @@ pub fn set_html(
     predicate: Option<&str>,
     timeout_ms: u64,
 ) -> Result<(), String> {
-    let t = tab(browser, target)?;
     let deadline = Instant::now() + Duration::from_millis(timeout_ms);
     // A base URL establishes relative-asset resolution, not a preliminary URL
     // navigation. Use the browser DOM parser to prepend <base> before installing
@@ -281,16 +265,15 @@ fn evaluate_raw(
         .ok_or_else(|| "JavaScript returned a non-JSON value".into())
 }
 
-// Screen emulation is a native CDP operation on the opaque Arc<Tab>. Source
-// validates dimensions and scale; this adapter only maps that public contract.
+// Screen emulation operates on the retained Tab handle. Source validates
+// dimensions and scale; this adapter only maps that public contract.
 pub fn set_viewport(
-    browser: &Browser,
-    target: &str,
+    tab: &headless_chrome::browser::tab::Tab,
     width: u32,
     height: u32,
     device_scale: f64,
 ) -> Result<(), String> {
-    tab(browser, target)?
+    tab
         .call_method(Emulation::SetDeviceMetricsOverride {
             width,
             height,
@@ -312,8 +295,7 @@ pub fn set_viewport(
 }
 
 pub fn wait_for_selector(
-    browser: &Browser,
-    target: &str,
+    tab: &headless_chrome::browser::tab::Tab,
     selector: &str,
     timeout_ms: u64,
 ) -> Result<(), String> {
@@ -321,49 +303,36 @@ pub fn wait_for_selector(
         "!!document.querySelector({})",
         serde_json::to_string(selector).map_err(|e| e.to_string())?
     );
-    wait_loop(tab(browser, target)?.as_ref(), &expression, timeout_ms)
+    wait_loop(tab, &expression, timeout_ms)
 }
 
 pub fn wait_for(
-    browser: &Browser,
-    target: &str,
+    tab: &headless_chrome::browser::tab::Tab,
     expression: &str,
     timeout_ms: u64,
 ) -> Result<(), String> {
-    wait_loop(
-        tab(browser, target)?.as_ref(),
-        &format!("!!({expression})"),
-        timeout_ms,
-    )
+    wait_loop(tab, &format!("!!({expression})"), timeout_ms)
 }
 
 pub fn evaluate(
-    browser: &Browser,
-    target: &str,
+    tab: &headless_chrome::browser::tab::Tab,
     expression: &str,
     await_promise: bool,
     timeout_ms: u64,
 ) -> Result<String, String> {
-    serde_json::to_string(&evaluate_raw(
-        tab(browser, target)?.as_ref(),
-        expression,
-        await_promise,
-        timeout_ms,
-    )?)
-    .map_err(|e| e.to_string())
+    serde_json::to_string(&evaluate_raw(tab, expression, await_promise, timeout_ms)?)
+        .map_err(|e| e.to_string())
 }
 
 // Capture an explicit viewport or the current CSS content extent. CDP's
 // captureBeyondViewport is not exposed by the high-level screenshot helper.
 // Return its base64 payload for the ordinary Terrane codec to decode.
 pub fn screenshot(
-    browser: &Browser,
-    target: &str,
+    t: &headless_chrome::browser::tab::Tab,
     format: &str,
     quality: Option<u32>,
     full_page: bool,
 ) -> Result<String, String> {
-    let t = tab(browser, target)?;
     let format = match format {
         "png" => Page::CaptureScreenshotFormatOption::Png,
         "jpeg" => Page::CaptureScreenshotFormatOption::Jpeg,
@@ -398,10 +367,9 @@ pub fn screenshot(
 }
 
 // Native print options are needed only because print_to_pdf is behind the
-// opaque tab. Named sizes, millimetre conversion and validation remain source.
+// retained tab handle. Named sizes, millimetre conversion and validation remain source.
 pub fn print_pdf(
-    browser: &Browser,
-    target: &str,
+    t: &headless_chrome::browser::tab::Tab,
     display_header_footer: bool,
     print_background: bool,
     prefer_css_page_size: bool,
@@ -417,17 +385,16 @@ pub fn print_pdf(
     page_ranges: Option<&str>,
     timeout_ms: u64,
 ) -> Result<Vec<u8>, String> {
-    let t = tab(browser, target)?;
     if expand_disclosures {
         evaluate_raw(
-            &t,
+            t,
             "document.querySelectorAll('details').forEach(e => e.open = true); true",
             false,
             timeout_ms,
         )?;
     }
     evaluate_raw(
-        &t,
+        t,
         "Promise.all(Array.from(document.images, i => i.decode())).then(() => document.fonts.ready).then(() => true)",
         true,
         timeout_ms,
@@ -453,15 +420,13 @@ pub fn print_pdf(
 // Capture metadata through the same native evaluator and drain only normalized
 // events. This is bounded diagnostic evidence, not an audit or full waterfall.
 pub fn diagnostics(
-    browser: &Browser,
-    target: &str,
+    t: &headless_chrome::browser::tab::Tab,
     events: &Receiver<String>,
     injected_html: bool,
     timeout_ms: u64,
 ) -> Result<String, String> {
-    let t = tab(browser, target)?;
     let document = evaluate_raw(
-        &t,
+        t,
         "({url:location.href,title:document.title,timing:performance.getEntriesByType('navigation')[0]?.toJSON() ?? null,resources:performance.getEntriesByType('resource').map(e=>e.toJSON())})",
         false,
         timeout_ms,
@@ -514,13 +479,4 @@ pub fn diagnostics(
     };
     let output = json!({"url":document["url"],"title":document["title"],"status":status,"navigation-timing":document["timing"],"resource-timings":document["resources"],"events":records,"capacity-reached":capacity_reached});
     serde_json::to_string(&output).map_err(|e| e.to_string())
-}
-
-// Explicit close can report CDP failure. Source always releases Browser after
-// this operation, including failure; its native Drop is the cleanup backstop.
-pub fn close(browser: &Browser, target: &str) -> Result<(), String> {
-    tab(browser, target)?
-        .close(false)
-        .map(|_| ())
-        .map_err(|e| e.to_string())
 }

@@ -43,7 +43,7 @@ No page clicking/typing, multi-page automation, downloads, raw CDP, or complete 
 
 ## Native boundary
 
-Public types belong to `streaky/chromium`; native browser and tab handles are private. The maintained backend accounts for browser launch lifetime inputs, opaque `Arc<Tab>` handles, and generic CDP/associated responses not expressible through current projection. These are projection limitations, not policy requirements; native code should be removed when the relevant calls and responses can be expressed through source. It is not retained to avoid short-lived clones.
+Public types belong to `streaky/chromium`; native browser and tab handles are private. Terrane retains the `Arc<Tab>` returned at page creation and uses ordinary projected methods for directly supported operations such as close. The maintained backend still accounts for browser launch lifetime inputs and generic CDP/associated responses not expressible through current projection. Those remaining boundaries are projection limitations, not policy requirements; native code should be removed as the relevant calls and responses become expressible through source. It is not retained to avoid short-lived clones.
 
 The backend uses `headless_chrome` 1.0.22. Native types are not part of the public API.
 
