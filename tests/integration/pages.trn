@@ -336,3 +336,20 @@ function test-page-close-is-idempotent-and-typed throws throwable;
     catch chromium-error
         failed = true
     assert-equal-bool; failed, true
+
+function test-launch-failure-is-a-chromium-error throws throwable;
+    browser = instance browser-options;
+    browser.executable = '/definitely/not/a/chromium/executable'
+    viewport = instance viewport-options;
+    failed bool = false
+    try
+        _ = open-page; browser, viewport
+    catch chromium-error
+        failed = true
+    assert-equal-bool; failed, true
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    assert-equal-bool; (page.is-open;), true
+    page.close;
+    assert-equal-bool; (page.is-open;), false

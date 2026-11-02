@@ -6,9 +6,13 @@ from /core/codecs import decode-base64
 from /core/collections import list
 from /core/documents import document-map-entries, make-document-none, make-document-list, make-document-map, make-document-bool
 from /core/errors import dependency-error, throwable, integer-conversion-overflow, coercion-error, index-error
+from /deps/headless-chrome import LaunchOptions as native-launch-options
 from /deps/headless-chrome import Browser as native-browser
 from /deps/headless-chrome import Arc-of-headless-chrome-Tab as native-tab
 from /deps/crossbeam-channel import Receiver as native-event-receiver
+from /deps/headless-chrome import PathBuf as native-pathbuf
+from /deps/crossbeam-channel import Duration as native-duration
+from /deps/headless-chrome/browser import default_executable as default-executable
 from /deps/headless-chrome/protocol/cdp/page import Navigate, NavigateReturnObject
 from /deps/headless-chrome/protocol/cdp/page import GetFrameTree, GetFrameTreeReturnObject
 from /deps/headless-chrome/protocol/cdp/page import SetDocumentContent, SetDocumentContentReturnObject
@@ -26,6 +30,12 @@ from /deps/serde-json import to_string as encode-native-json, Error as native-js
 private class event-poll
     text string|none = none
     stopped bool = false
+
+# Private event-only Result carrier; remove with the retained native event bridge.
+# This is stack storage for the exact Receiver/error alternative, not launch policy.
+private class event-capture
+    receiver (native-event-receiver of string)|none = none
+    error string = ''
 
 private owning interface cdp-client
     associated type navigation-response
@@ -312,6 +322,25 @@ public class page implements cdp-client
         this.state.tab = none
         this.state.browser = none
 
+# The private event setup bridge owns its native channel and error conversion.
+# Retained callbacks and typed event policy still use chromium_events::capture;
+# remove this crossing when that event ownership contract projects directly.
+private function capture-events (native-event-receiver of string) throws chromium-error; owner ref native-browser, tab ref native-tab, capacity uint64, timeout uint64
+    result event-capture = rust
+        let captured = usize::try_from(capacity)
+            .map_err(|_| "invalid diagnostic capacity".to_owned())
+            .and_then(|capacity| crate::chromium_events::capture(
+                &owner.get_ws_url(), tab.get_target_id(), capacity, timeout,
+            ));
+        match captured {
+            Ok(receiver) => EventCapture { receiver: Some(receiver), error: String::new() },
+            Err(error) => EventCapture { receiver: None, error },
+        }
+    captured = move result.receiver
+    if captured != none
+        return move captured
+    throw chromium-error; move result.error
+
 public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
     validate-viewport; viewport
     if browser.timeout-ms <= 0 or browser.timeout-ms > 2147483647
@@ -325,32 +354,38 @@ public function open-page shared ref page; browser ref browser-options, viewport
         capacity = browser.diagnostic-capacity
     catch integer-conversion-overflow as error
         throw chromium-error; move error.message
-    # chromium/projection-launch-options: native construction is unavailable.
-    # Transfer Browser, Arc<Tab> and Receiver into source-owned slots, not a global registry.
-    state page-state = rust
-        match crate::chromium_backend::open_page(
-            browser.executable.as_deref(),
-            timeout,
-            usize::try_from(capacity).expect("validated diagnostic capacity"),
-        ) {
-            Ok((owner, tab, events)) => {
-                let mut state = PageState::terrane_construct();
-                state.browser = Some(owner);
-                state.tab = Some(tab);
-                state.events = Some(events);
-                state
-            },
-            Err(error) => {
-                let mut state = PageState::terrane_construct();
-                state.error = error;
-                state
-            },
-        }
-    finish-operation; state.error
-    state.timeout-ms = browser.timeout-ms
-    managed = instance page; move state
-    managed.set-viewport; viewport
-    return shared ref managed
+    launch-path native-pathbuf|none = none
+    executable = browser.executable
+    if executable == none
+        try
+            launch-path = default-executable;
+        catch dependency-error as error
+            throw chromium-error; 'could not find Chromium: ' + error.message
+    else
+        # chromium/projection-pathbuf: source text to PathBuf conversion is not
+        # projected. Remove this typed conversion when PathBuf construction projects.
+        launch-path = rust
+            executable.as_deref().map(std::path::PathBuf::from)
+    idle-timeout native-duration = native-duration::from_secs; 30
+    empty-arguments list of string = list;
+    options = instance native-launch-options; headless = true, sandbox = true, devtools = false, enable-gpu = false, enable-logging = false, window-size = none, port = none, ignore-certificate-errors = true, path = move launch-path, user-data-dir = none, extensions = empty-arguments, args = empty-arguments, ignore-default-args = empty-arguments, disable-default-args = false, idle-browser-timeout = move idle-timeout, process-envs = none, proxy-server = none
+    tab-timeout native-duration = native-duration::from_millis; timeout
+    try
+        owner native-browser = native-browser::new; move options
+        # A fresh tab avoids Chrome's privileged new-tab CSP blocking scripts in installed HTML.
+        tab native-tab = owner.new_tab;
+        tab.set_default_timeout; move tab-timeout
+        events = capture-events; owner, tab, capacity, timeout
+        state = instance page-state;
+        state.browser = move owner
+        state.tab = move tab
+        state.events = move events
+        state.timeout-ms = browser.timeout-ms
+        managed = instance page; move state
+        managed.set-viewport; viewport
+        return shared ref managed
+    catch dependency-error as error
+        throw chromium-error; move error.message
 
 
 private function page-navigate; target ref page, url ref string, loading ref load-options
