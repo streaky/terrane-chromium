@@ -1,0 +1,51 @@
+namespace streaky/chromium
+
+from /core/documents import document-value, make-document-none, make-document-string
+from /core/documents/json import parse-json, default-json-options
+
+# Browser work uses host time, including under the test runner's virtual core
+# clock. The exported native Instant owner is opaque to projection today. Keep
+# only clock/sleep primitives native; deadlines and polling policy remain source.
+# Remove these primitives when the standard host-clock path is projectable.
+private function browser-milliseconds int64;
+    return rust
+        static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        i64::try_from(START.get_or_init(std::time::Instant::now).elapsed().as_millis()).unwrap_or(i64::MAX)
+
+private function browser-sleep; milliseconds uint64
+    rust
+        std::thread::sleep(std::time::Duration::from_millis(milliseconds))
+
+private function page-deadline int; timeout-ms int
+    now int = browser-milliseconds;
+    return now + timeout-ms
+
+private function remaining-ms int; deadline int
+    now int = browser-milliseconds;
+    remaining = deadline - now
+    if remaining <= 0
+        throw chromium-error; 'timed out waiting for page readiness'
+    return remaining
+
+private function poll-delay; deadline int
+    remaining = remaining-ms; deadline
+    delay uint64 = 25
+    if remaining < 25
+        delay = remaining
+    browser-sleep; delay
+
+private function quote-js string; value ref string
+    quoted = make-document-string; value
+    return quoted.encoded
+
+private function decode-browser-json document-value; text string
+    parsed = parse-json; move text, (default-json-options;)
+    if parsed.failed
+        throw chromium-error; 'could not decode browser result: ' + parsed.message
+    return move parsed.value
+
+private function document-field document-value; value ref document-value, name string
+    field = value.field; name
+    if field.failed
+        return make-document-none;
+    return move field.value

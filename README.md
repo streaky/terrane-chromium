@@ -43,7 +43,13 @@ No page clicking/typing, multi-page automation, downloads, raw CDP, or complete 
 
 ## Native boundary
 
-Public types belong to `streaky/chromium`; native browser and tab handles are private. Terrane retains the `Arc<Tab>` returned at page creation and uses ordinary projected methods for directly supported operations such as close. The maintained backend still accounts for browser launch lifetime inputs and generic CDP/associated responses not expressible through current projection. Those remaining boundaries are projection limitations, not policy requirements; native code should be removed as the relevant calls and responses become expressible through source. It is not retained to avoid short-lived clones.
+Public types belong to `streaky/chromium`; native browser and tab handles are private. Terrane retains the `Arc<Tab>` returned at page creation. Navigation, typed CDP requests/responses, readiness, evaluation, viewport/screenshot capture, printing, and diagnostic aggregation are package source policy, not Rust adapters.
+
+The private associated-type contract binds each operation to its projected response type. Source methods call the retained tab's generic CDP operation directly; no request wrapper allocation or packed numeric argument vector mediates that relationship. Evaluation serializes a borrowed native JSON value through projected `serde_json::to_string` before the source document parser consumes it.
+
+The launch adapter remains because `Browser::new(LaunchOptions<'_>)` has a lifetime-bearing input and must transfer Browser, Tab, and event receiver ownership into page state. Remove it when source can construct configured browsers and own those lifetimes. The narrow diagnostic poll bridge only maps crossbeam's typed `Empty` versus `Disconnected` result; remove it when the receiver exposes that distinction directly to Terrane.
+
+Browser wall-clock and sleep primitives remain because the native `Instant` is opaque and `/core/time` is virtual under the native test runner. Remove those primitives when a projected host clock/sleep path exists. No retained Rust operation exists to avoid short-lived clones.
 
 The backend uses `headless_chrome` 1.0.22. Native types are not part of the public API.
 
