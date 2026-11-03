@@ -336,3 +336,104 @@ function test-page-close-is-idempotent-and-typed throws throwable;
     catch chromium-error
         failed = true
     assert-equal-bool; failed, true
+
+function test-launch-failure-is-a-chromium-error throws throwable;
+    browser = instance browser-options;
+    browser.executable = '/definitely/not/a/chromium/executable'
+    viewport = instance viewport-options;
+    failed bool = false
+    try
+        _ = open-page; browser, viewport
+    catch chromium-error
+        failed = true
+    assert-equal-bool; failed, true
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    assert-equal-bool; (page.is-open;), true
+    page.close;
+    assert-equal-bool; (page.is-open;), false
+
+function test-diagnostic-buffer-is-bounded-and-recovers throws throwable;
+    browser = browser-for-test;
+    browser.diagnostic-capacity = 1
+    viewport = instance viewport-options;
+    page = open-page; browser, viewport
+    loading = instance load-options;
+    loading.wait-for-assets = false
+    html = '<!doctype html><title>Bounded diagnostics</title>'
+    page.set-html; html, loading
+    _ = page.diagnostics;
+    expression = '(()=>{for(let i=0;i<20;i++)console.warn("burst",i);return true})()'
+    _ = page.evaluate; expression, false
+    started = host-milliseconds;
+    lost bool = false
+    while not lost
+        snapshot = page.diagnostics;
+        events = field-value; snapshot, 'events'
+        assert-equal-bool; (document-length; events) <= 1, true
+        dropped = field-value; snapshot, 'dropped-events'
+        # Integer document text is canonical signed decimal; this comparison tests positivity without treating arbitrary text as numeric.
+        lost = dropped.integer.text > '0'
+        if lost
+            reached = field-value; snapshot, 'capacity-reached'
+            assert-equal-string; reached.scalar, 'true'
+        if (host-milliseconds;) - started >= 5000 and not lost
+            test-fail; 'diagnostic buffer never reported rejected events'
+    expression = '(()=>{console.warn("after-drain");return true})()'
+    observed bool = false
+    while not observed
+        _ = page.evaluate; expression, false
+        snapshot = page.diagnostics;
+        events = field-value; snapshot, 'events'
+        assert-equal-bool; (document-length; events) <= 1, true
+        for index in (range; 0, (document-length; events))
+            item = events.item; index
+            message = field-value; item.value, 'message'
+            if message.scalar == 'after-drain'
+                observed = true
+        if (host-milliseconds;) - started >= 5000 and not observed
+            test-fail; 'diagnostic buffer did not accept events after draining'
+    snapshot = page.diagnostics;
+    dropped = field-value; snapshot, 'dropped-events'
+    assert-equal-bool; dropped.integer.text > '0', true
+    reached = field-value; snapshot, 'capacity-reached'
+    assert-equal-string; reached.scalar, 'false'
+    page.close;
+
+private function isolated-console bool; snapshot ref document-value, expected string, forbidden string
+    events = field-value; snapshot, 'events'
+    observed bool = false
+    for index in (range; 0, (document-length; events))
+        item = events.item; index
+        kind = field-value; item.value, 'kind'
+        message = field-value; item.value, 'message'
+        if kind.scalar == 'console'
+            assert-equal-bool; message.scalar != forbidden, true
+            if message.scalar == expected
+                observed = true
+    return observed
+
+function test-diagnostic-listeners-are-page-isolated throws throwable;
+    browser = browser-for-test;
+    viewport = instance viewport-options;
+    first = open-page; browser, viewport
+    second = open-page; browser, viewport
+    first-expression = '(()=>{console.warn("first-only");return true})()'
+    second-expression = '(()=>{console.warn("second-only");return true})()'
+    _ = first.evaluate; first-expression, false
+    _ = second.evaluate; second-expression, false
+    started = host-milliseconds;
+    first-seen bool = false
+    second-seen bool = false
+    while not first-seen or not second-seen
+        first-snapshot = first.diagnostics;
+        second-snapshot = second.diagnostics;
+        first-observed = isolated-console; first-snapshot, 'first-only', 'second-only'
+        second-observed = isolated-console; second-snapshot, 'second-only', 'first-only'
+        first-seen = first-seen or first-observed
+        second-seen = second-seen or second-observed
+        if (host-milliseconds;) - started >= 5000 and (not first-seen or not second-seen)
+            test-fail; 'isolated listener messages were not observed'
+    first.close;
+    second.close;

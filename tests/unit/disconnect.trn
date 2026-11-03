@@ -1,0 +1,40 @@
+namespace streaky/chromium
+from /core/testing import test-arguments, skip, assert-equal-bool
+from /core/errors import throwable
+from /core/process import exit, make-exit-status
+function test-unexpected-target-close-is-a-typed-diagnostic-failure throws throwable;
+    arguments = test-arguments;
+    if arguments.length < 1 or not arguments[0].is-text
+        skip; 'supply a Chromium executable path as the first --argument'
+    # Match the integration harness's child-only short browser socket directory.
+    child-status int32 = rust
+        if cfg!(unix) && std::env::var_os("TERRANE_CHROMIUM_TEST_CHILD").is_none() {
+            std::env::current_exe().and_then(|executable|
+                std::process::Command::new(executable).args(std::env::args_os().skip(1))
+                    .env("TMPDIR", "/tmp").env("TERRANE_CHROMIUM_TEST_CHILD", "1").status()
+            ).map(|status| status.code().unwrap_or(101)).unwrap_or(101)
+        } else { -1 }
+    if child-status >= 0
+        exit; (make-exit-status; child-status)
+    browser = instance browser-options;
+    browser.executable = arguments[0].text
+    browser.timeout-ms = 1000
+    viewport = instance viewport-options;
+    target = open-page; browser, viewport
+    # Close the native target without the public source cleanup: the Weak
+    # listener token may still upgrade although the target no longer responds.
+    tab = target.state.tab
+    if tab != none
+        _ = tab.close_target;
+    caught bool = false
+    try
+        _ = target.diagnostics;
+    catch chromium-error
+        caught = true
+    assert-equal-bool; caught, true
+    try
+        target.close;
+        assert-equal-bool; (target.is-open;), false
+    catch chromium-error
+        # Native close may report the already-closed target after source cleanup.
+        assert-equal-bool; (target.is-open;), false

@@ -3,14 +3,61 @@ namespace streaky/chromium
 from /core/documents import document-value
 from /core/documents/json import parse-json, default-json-options
 from /core/codecs import decode-base64
+from /core/collections import list
+from /core/documents import document-map-entries, make-document-none, make-document-list, make-document-map, make-document-bool, make-document-integer
+from /core/errors import dependency-error, throwable, integer-conversion-overflow, coercion-error, index-error
+from /deps/headless-chrome import LaunchOptions as native-launch-options
 from /deps/headless-chrome import Browser as native-browser
-from /deps/crossbeam-channel import Receiver as native-event-receiver
+from /deps/headless-chrome import Arc-of-headless-chrome-Tab as native-tab
+from /deps/headless-chrome import Weak as native-listener-token
+from /deps/headless-chrome/protocol/cdp/types import Event as native-event
+from /deps/headless-chrome import PathBuf as native-pathbuf
+from /deps/crossbeam-channel import Duration as native-duration
+from /deps/headless-chrome/browser import default_executable as default-executable
+from /deps/headless-chrome/protocol/cdp/page import Navigate, NavigateReturnObject
+from /deps/headless-chrome/protocol/cdp/page import GetFrameTree, GetFrameTreeReturnObject
+from /deps/headless-chrome/protocol/cdp/page import SetDocumentContent, SetDocumentContentReturnObject
+from /deps/headless-chrome/protocol/cdp/page import CaptureScreenshot, CaptureScreenshotReturnObject
+from /deps/headless-chrome/protocol/cdp/page import CaptureScreenshotFormatOption, Viewport
+from /deps/headless-chrome/protocol/cdp/page import GetLayoutMetrics, GetLayoutMetricsReturnObject
+from /deps/headless-chrome/protocol/cdp/page import PrintToPDF, PrintToPDFReturnObject
+from /deps/headless-chrome/protocol/cdp/runtime import RemoteObjectSubtype
+from /deps/headless-chrome/protocol/cdp/runtime import Evaluate, EvaluateReturnObject
+from /deps/headless-chrome/protocol/cdp/emulation import SetDeviceMetricsOverride, SetDeviceMetricsOverrideReturnObject
+from /deps/headless-chrome/protocol/cdp/network import Enable as native-network-enable, EnableReturnObject as native-network-enable-response
+from /deps/serde-json import Value as native-json-value
+
+
+private class event-capture
+    token native-listener-token|none = none
+    statistics shared ref capture-statistics
+    function construct; statistics shared ref capture-statistics
+        this.statistics = move statistics
+
+private owning interface cdp-client
+    associated type navigation-response
+    associated type frame-response
+    associated type html-response
+    associated type evaluation-response
+    associated type viewport-response
+    associated type layout-response
+    associated type screenshot-response
+    associated type print-response
+    associated type network-enable-response
+    private function send-navigation navigation-response throws throwable; request Navigate
+    private function send-frame frame-response throws throwable; request GetFrameTree
+    private function send-html html-response throws throwable; request SetDocumentContent
+    private function send-evaluation evaluation-response throws throwable; request Evaluate
+    private function send-viewport viewport-response throws throwable; request SetDeviceMetricsOverride
+    private function send-layout layout-response throws throwable; request GetLayoutMetrics
+    private function send-screenshot screenshot-response throws throwable; request CaptureScreenshot
+    private function send-print print-response throws throwable; request PrintToPDF
+    private function send-network-enable network-enable-response throws throwable; request native-network-enable
 
 public class viewport-options
     width int = 1280
     height int = 720
     device-scale-factor float = 1.0
-
 public class load-options
     base-url string|none = none
     wait-for-assets bool = true
@@ -24,19 +71,12 @@ public class screenshot-options
 
 private class page-state
     browser native-browser|none = none
-    events (native-event-receiver of string)|none = none
-    target-id string = ''
+    tab native-tab|none = none
+    events event-capture|none = none
     timeout-ms int = 30000
     injected-html bool = true
     error string = ''
 
-private class operation-outcome
-    value string = ''
-    error string = ''
-
-private class binary-outcome
-    data bytes = b''
-    error string = ''
 
 private class paper-dimensions
     width float|none = none
@@ -46,16 +86,15 @@ private function require-page; state ref page-state
     if state.browser == none
         throw chromium-error; 'page is closed'
 
+private function page-tab native-tab; state ref page-state
+    tab = state.tab
+    if tab != none
+        return tab
+    throw chromium-error; 'page is closed'
 private function finish-operation; message string
     if message != ''
         throw chromium-error; move message
 
-private function decode-page-document document-value; outcome operation-outcome
-    finish-operation; outcome.error
-    parsed = parse-json; outcome.value, (default-json-options;)
-    if parsed.failed
-        throw chromium-error; 'could not decode browser result: ' + parsed.message
-    return move parsed.value
 
 private function validate-viewport; viewport ref viewport-options
     if viewport.width <= 0 or viewport.width > 2147483647 or viewport.height <= 0 or viewport.height > 2147483647
@@ -123,57 +162,210 @@ private function pdf-paper paper-dimensions; printing ref pdf-options
             throw chromium-error; 'PDF scale must be finite and between 0.1 and 2.0'
     return move dimensions
 
-public class page
+public class page implements cdp-client
+    associated type navigation-response = NavigateReturnObject
+    associated type frame-response = GetFrameTreeReturnObject
+    associated type html-response = SetDocumentContentReturnObject
+    associated type evaluation-response = EvaluateReturnObject
+    associated type viewport-response = SetDeviceMetricsOverrideReturnObject
+    associated type layout-response = GetLayoutMetricsReturnObject
+    associated type screenshot-response = CaptureScreenshotReturnObject
+    associated type print-response = PrintToPDFReturnObject
+    associated type network-enable-response = native-network-enable-response
     private state page-state
 
     private function construct; state page-state
         this.state = move state
+
+    private function send-navigation navigation-response throws throwable; request Navigate
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-frame frame-response throws throwable; request GetFrameTree
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-html html-response throws throwable; request SetDocumentContent
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-evaluation evaluation-response throws throwable; request Evaluate
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-viewport viewport-response throws throwable; request SetDeviceMetricsOverride
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-layout layout-response throws throwable; request GetLayoutMetrics
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-screenshot screenshot-response throws throwable; request CaptureScreenshot
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function send-print print-response throws throwable; request PrintToPDF
+        tab = page-tab; this.state
+        return tab.call_method; move request
+    private function send-network-enable network-enable-response throws throwable; request native-network-enable
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function enable-diagnostic-domains;
+        tab = page-tab; this.state
+        tab.enable_runtime;
+        request = instance native-network-enable; max-total-buffer-size = none, max-resource-buffer-size = none, max-post-data-size = none, report-direct-socket-traffic = none, enable-durable-messages = none
+        this.send-network-enable; move request
+
+
 
     function is-open bool;
         return this.state.browser != none
 
     mutable function navigate; url ref string, loading ref load-options
         this.state.injected-html = false
-        page-navigate; this.state, url, loading
+        try
+            page-navigate; this, url, loading
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function set-html; html ref string, loading ref load-options
         this.state.injected-html = true
-        page-set-html; this.state, html, loading
+        try
+            page-set-html; this, html, loading
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function set-viewport; viewport ref viewport-options
-        page-set-viewport; this.state, viewport
+        try
+            page-set-viewport; this, viewport
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function wait-for-selector; selector ref string
-        page-wait-selector; this.state, selector
+        try
+            page-wait-selector; this, selector
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function wait-for; expression ref string
-        page-wait; this.state, expression
+        try
+            page-wait; this, expression
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function evaluate document-value; expression ref string, await-promise bool
-        return page-evaluate; this.state, expression, await-promise
+        try
+            return page-evaluate; this, expression, await-promise
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function screenshot bytes; options ref screenshot-options
-        return page-screenshot; this.state, options
+        try
+            return page-screenshot; this, options
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function print-pdf bytes; printing ref pdf-options
-        return page-print; this.state, printing
+        try
+            return page-print; this, printing
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
 
     mutable function diagnostics document-value;
-        return page-diagnostics; this.state
-
+        try
+            return page-diagnostics; this
+        catch dependency-error as error
+            throw chromium-error; move error.message
+        catch integer-conversion-overflow as error
+            throw chromium-error; move error.message
+        catch coercion-error as error
+            throw chromium-error; move error.message
+        catch index-error as error
+            throw chromium-error; move error.message
     mutable function close;
         if this.state.browser == none
             return
+        release-message = release-events; this.state
         message = page-close; this.state
         this.state.events = none
+        this.state.tab = none
         this.state.browser = none
+        finish-operation; move release-message
         finish-operation; move message
 
     function destruct;
-        # Source owns the browser and event receiver. Native Drop cleans up on
-        # errors/scope exit; explicit close additionally reports CDP close errors.
+        # Source owns the browser, tab and event receiver. Native Drop cleans up
+        # on errors/scope exit; explicit close additionally reports CDP errors.
+        # Destruction cannot report cleanup errors; explicit close reports both
+        # listener removal and CDP errors after still releasing native ownership.
+        _ = release-events; this.state
         this.state.events = none
+        this.state.tab = none
         this.state.browser = none
+
+# The callback does no CDP work: upstream invokes it under its registry lock.
+# Removal runs outside callbacks and preserves the exact native Weak identity.
+private function capture-events event-capture; tab ref native-tab, capacity int
+    empty list of document-value = list;
+    statistics = shared ref (instance capture-statistics; records = move empty, capacity = capacity)
+    listener = function; event ref native-event
+        try
+            record = normalize-event; event
+            if record != none
+                statistics.enqueue; move record
+        catch throwable as error
+            statistics.record-failure; error.message
+    token = tab.add_event_listener; move listener
+    captured = instance event-capture; statistics = statistics
+    captured.token = move token
+    return move captured
+
+private function release-events string; state ref page-state
+    captured = state.events
+    tab = state.tab
+    if captured != none
+        if tab != none
+            token = captured.token
+            if token != none
+                try
+                    tab.remove_event_listener; token
+                catch throwable as error
+                    return error.message
+    return ''
 
 public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
     validate-viewport; viewport
@@ -181,134 +373,319 @@ public function open-page shared ref page; browser ref browser-options, viewport
         throw chromium-error; 'timeout must be a positive 32-bit millisecond count'
     if browser.diagnostic-capacity <= 0 or browser.diagnostic-capacity > 2147483647
         throw chromium-error; 'diagnostic capacity must be a positive 32-bit count'
-    # chromium/projection-launch-options: native construction is unavailable.
-    # Transfer Browser/Receiver into source-owned slots, not a global registry.
-    state page-state = rust
-        match crate::chromium_backend::open_page(
-            browser.executable.as_deref(),
-            browser.timeout_ms.to_string().parse::<u64>().expect("validated timeout"),
-            viewport.width.to_string().parse::<u32>().expect("validated width"),
-            viewport.height.to_string().parse::<u32>().expect("validated height"),
-            viewport.device_scale_factor,
-            browser.diagnostic_capacity.to_string().parse::<usize>().expect("validated capacity"),
-        ) {
-            Ok((owner, events, target_id)) => {
-                let mut state = PageState::terrane_construct();
-                state.browser = Some(owner);
-                state.events = Some(events);
-                state.target_id = target_id;
-                state
-            },
-            Err(error) => {
-                let mut state = PageState::terrane_construct();
-                state.error = error;
-                state
-            },
-        }
-    finish-operation; state.error
-    state.timeout-ms = browser.timeout-ms
-    return shared ref (instance page; move state)
+    timeout uint64 = 0
+    try
+        timeout = browser.timeout-ms
+    catch integer-conversion-overflow as error
+        throw chromium-error; move error.message
+    launch-path native-pathbuf|none = none
+    executable = browser.executable
+    if executable == none
+        try
+            launch-path = default-executable;
+        catch dependency-error as error
+            throw chromium-error; 'could not find Chromium: ' + error.message
+    else
+        # chromium/projection-pathbuf: source text to PathBuf conversion is not
+        # projected. Remove this typed conversion when PathBuf construction projects.
+        launch-path = rust
+            executable.as_deref().map(std::path::PathBuf::from)
+    idle-timeout native-duration = native-duration::from_secs; 30
+    empty-arguments list of string = list;
+    options = instance native-launch-options; headless = true, sandbox = true, devtools = false, enable-gpu = false, enable-logging = false, window-size = none, port = none, ignore-certificate-errors = true, path = move launch-path, user-data-dir = none, extensions = empty-arguments, args = empty-arguments, ignore-default-args = empty-arguments, disable-default-args = false, idle-browser-timeout = move idle-timeout, process-envs = none, proxy-server = none
+    tab-timeout native-duration = native-duration::from_millis; timeout
+    try
+        owner native-browser = native-browser::new; move options
+        # A fresh tab avoids Chrome's privileged new-tab CSP blocking scripts in installed HTML.
+        tab native-tab = owner.new_tab;
+        tab.set_default_timeout; move tab-timeout
+        events = capture-events; tab, browser.diagnostic-capacity
+        state = instance page-state;
+        state.browser = move owner
+        state.tab = move tab
+        state.events = move events
+        state.timeout-ms = browser.timeout-ms
+        managed = instance page; move state
+        managed.enable-diagnostic-domains;
+        managed.set-viewport; viewport
+        return shared ref managed
+    catch dependency-error as error
+        throw chromium-error; move error.message
 
-# The following blocks adapt source-owned fields/results to the documented
-# native Arc<Tab>/generic-CDP boundary. No public native handles escape. Ordinary
-# validation, units, lifecycle and policy live above in Terrane; remove these
-# blocks with that boundary when the required projected operations are admitted.
 
-private function page-navigate; state ref page-state, url ref string, loading ref load-options
-    require-page; state
-    message string = rust
-        crate::chromium_backend::navigate(state.browser.as_ref().expect("checked open page"), &state.target_id, url, loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
-    finish-operation; move message
+private function page-navigate; target ref page, url ref string, loading ref load-options
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    request = instance Navigate; url = url
+    request.referrer = none
+    request.transition-Type = none
+    request.frame-id = none
+    request.referrer-policy = none
+    response = target.send-navigation; move request
+    if response.error-text != none
+        throw chromium-error; 'navigation failed: ' + response.error-text
+    download = response.is-download
+    if download != none
+        if download == true
+            throw chromium-error; 'navigation started a download rather than a page'
+    loader = response.loader-id
+    if loader != none
+        while true
+            remaining-ms; deadline
+            frame-request = instance GetFrameTree;
+            frame-request.n0 = none
+            frame = target.send-frame; move frame-request
+            if frame.frame-tree.frame.loader-id == loader
+                break
+            poll-delay; deadline
+    page-wait-until; target, 'document.readyState === "complete"', deadline
+    page-readiness; target, loading, deadline
 
-private function page-set-html; state ref page-state, html ref string, loading ref load-options
-    require-page; state
-    message string = rust
-        crate::chromium_backend::set_html(state.browser.as_ref().expect("checked open page"), &state.target_id, html, loading.base_url.as_deref(), loading.wait_for_assets, loading.ready_selector.as_deref(), loading.ready_expression.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
-    finish-operation; move message
+private function page-set-html; target ref page, html ref string, loading ref load-options
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    content string = html
+    base-url = loading.base-url
+    if base-url != none
+        quoted-html = quote-js; html
+        quoted-base-url = quote-js; base-url
+        expression = '(()=>{const doc=new DOMParser().parseFromString(' + quoted-html + ',"text/html");const base=doc.createElement("base");base.href=' + quoted-base-url + ';doc.head.prepend(base);return (doc.doctype?new XMLSerializer().serializeToString(doc.doctype):"")+doc.documentElement.outerHTML;})()'
+        prepared = page-evaluate-until; target, expression, false, deadline
+        content = prepared.scalar
+    frame-request = instance GetFrameTree;
+    frame-request.n0 = none
+    frame = target.send-frame; move frame-request
+    request = instance SetDocumentContent; frame-id = frame.frame-tree.frame.id, html = content
+    target.send-html; move request
+    page-readiness; target, loading, deadline
 
-private function page-set-viewport; state ref page-state, viewport ref viewport-options
-    require-page; state
+private function page-readiness; target ref page, loading ref load-options, deadline int
+    if loading.wait-for-assets
+        page-evaluate-until; target, 'Promise.all(Array.from(document.images, i => i.decode())).then(() => document.fonts.ready).then(() => true)', true, deadline
+    selector = loading.ready-selector
+    if selector != none
+        quoted = quote-js; selector
+        page-wait-until; target, '!!document.querySelector(' + quoted + ')', deadline
+    predicate = loading.ready-expression
+    if predicate != none
+        page-wait-until; target, '!!(' + predicate + ')', deadline
+
+private function page-wait-until; target ref page, expression string, deadline int
+    while true
+        result = page-evaluate-until; target, expression, false, deadline
+        if result.kind == 'bool' and result.scalar == 'true'
+            return
+        poll-delay; deadline
+
+private function page-evaluate-until document-value; target ref page, expression string, await-promise bool, deadline int
+    remaining = remaining-ms; deadline
+    script = expression
+    if await-promise
+        script = '(()=>{const start=Date.now();const value=(' + expression + ');let timer;return Promise.race([Promise.resolve(value),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("JavaScript promise timed out")),Math.max(0,' + (remaining.to-string;) + '-(Date.now()-start)));})]).finally(()=>clearTimeout(timer));})()'
+    request = instance Evaluate; expression = script
+    request.object-group = none
+    request.include-command-line-api = false
+    request.silent = false
+    request.context-id = none
+    request.return-by-value = true
+    request.generate-preview = false
+    request.user-gesture = false
+    request.await-promise = await-promise
+    request.throw-on-side-effect = none
+    request.timeout = remaining
+    request.disable-breaks = none
+    request.repl-mode = none
+    request.allow-unsafe-eval-blocked-by-csp = none
+    request.unique-context-id = none
+    request.serialization-options = none
+    response = target.send-evaluation; move request
+    exception = ref response.exception-details
+    if exception != none
+        detail = ref exception.exception
+        if detail != none
+            description = detail.description
+            if description != none
+                throw chromium-error; 'JavaScript evaluation failed: ' + description
+        throw chromium-error; 'JavaScript evaluation failed: ' + exception.text
+    remote = ref response.result
+    subtype = remote.subtype
+    if subtype != none
+        if subtype != (RemoteObjectSubtype::Null;) and subtype != (RemoteObjectSubtype::Array;)
+            throw chromium-error; 'JavaScript returned a non-JSON object or an unawaited promise'
+    value = ref remote.value
+    if value != none
+        converted = document-from-native-json; value
+        if converted.failed
+            throw chromium-error; 'JavaScript JSON conversion failed: ' + converted.message
+        return move converted.value
+    if subtype != none
+        if subtype == (RemoteObjectSubtype::Null;)
+            return make-document-none;
+    throw chromium-error; 'JavaScript returned a non-JSON value'
+
+private function page-evaluate document-value; target ref page, expression ref string, await-promise bool
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    return page-evaluate-until; target, expression, await-promise, deadline
+
+private function page-set-viewport; target ref page, viewport ref viewport-options
+    require-page; target.state
     validate-viewport; viewport
-    message string = rust
-        crate::chromium_backend::set_viewport(state.browser.as_ref().expect("checked open page"), &state.target_id, viewport.width.to_string().parse::<u32>().expect("validated width"), viewport.height.to_string().parse::<u32>().expect("validated height"), viewport.device_scale_factor).err().unwrap_or_default()
-    finish-operation; move message
+    request = instance SetDeviceMetricsOverride; width = viewport.width, height = viewport.height, device-scale-factor = viewport.device-scale-factor, mobile = false
+    request.scale = none
+    request.screen-width = none
+    request.screen-height = none
+    request.position-x = none
+    request.position-y = none
+    request.dont-set-visible-size = none
+    request.screen-orientation = none
+    request.viewport = none
+    target.send-viewport; move request
 
-private function page-wait-selector; state ref page-state, selector ref string
-    require-page; state
-    message string = rust
-        crate::chromium_backend::wait_for_selector(state.browser.as_ref().expect("checked open page"), &state.target_id, selector, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
-    finish-operation; move message
+private function page-wait-selector; target ref page, selector ref string
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    quoted = quote-js; selector
+    page-wait-until; target, '!!document.querySelector(' + quoted + ')', deadline
 
-private function page-wait; state ref page-state, expression ref string
-    require-page; state
-    message string = rust
-        crate::chromium_backend::wait_for(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")).err().unwrap_or_default()
-    finish-operation; move message
+private function page-wait; target ref page, expression ref string
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    page-wait-until; target, '!!(' + expression + ')', deadline
 
-private function page-evaluate document-value; state ref page-state, expression ref string, await-promise bool
-    require-page; state
-    outcome operation-outcome = rust
-        match crate::chromium_backend::evaluate(state.browser.as_ref().expect("checked open page"), &state.target_id, expression, await_promise, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
-            Ok(value) => OperationOutcome { value, error: String::new() },
-            Err(error) => OperationOutcome { value: String::new(), error },
-        }
-    return decode-page-document; move outcome
-
-private function page-screenshot bytes; state ref page-state, options ref screenshot-options
-    require-page; state
+private function page-screenshot bytes; target ref page, options ref screenshot-options
+    require-page; target.state
     if options.format != 'png' and options.format != 'jpeg'
         throw chromium-error; 'screenshot format must be png or jpeg'
     quality = options.quality
     if quality != none
         if options.format != 'jpeg' or quality < 0 or quality > 100
             throw chromium-error; 'quality is only valid for JPEG and must be between 0 and 100'
-    # CDP returns base64; decoding is an ordinary source codec operation.
-    outcome operation-outcome = rust
-        match crate::chromium_backend::screenshot(state.browser.as_ref().expect("checked open page"), &state.target_id, &options.format,
-            options.quality.as_ref().map(|quality| quality.to_string().parse::<u32>().expect("validated quality")),
-            options.full_page) {
-            Ok(value) => OperationOutcome { value, error: String::new() },
-            Err(error) => OperationOutcome { value: String::new(), error },
-        }
-    finish-operation; outcome.error
-    decoded = decode-base64; move outcome.value, false, true
+    request = instance CaptureScreenshot;
+    if options.format == 'png'
+        request.format = (CaptureScreenshotFormatOption::Png;)
+    else
+        request.format = (CaptureScreenshotFormatOption::Jpeg;)
+    request.quality = quality
+    if options.full-page
+        layout-request = instance GetLayoutMetrics;
+        layout-request.n0 = none
+        layout = target.send-layout; move layout-request
+        size = layout.css-content-size
+        clip = instance Viewport; x = 0.0, y = 0.0, width = size.width, height = size.height, scale = 1.0
+        request.clip = clip
+    else
+        request.clip = none
+    request.from-surface = true
+    request.capture-beyond-viewport = options.full-page
+    request.optimize-for-speed = none
+    response = target.send-screenshot; move request
+    encoded = ref response.data
+    decoded = decode-base64; encoded, false, true
     if decoded.failed
         throw chromium-error; 'could not decode screenshot: ' + decoded.message
     return move decoded.value
 
-private function page-print bytes; state ref page-state, printing ref pdf-options
-    require-page; state
+private function page-print bytes; target ref page, printing ref pdf-options
+    require-page; target.state
     dimensions = pdf-paper; printing
-    # Unit conversion and named sizes are source policy, not a native gap.
+    if printing.expand-disclosures
+        disclosure-deadline = page-deadline; target.state.timeout-ms
+        page-evaluate-until; target, 'document.querySelectorAll("details").forEach(e => e.open = true); true', false, disclosure-deadline
+    assets-deadline = page-deadline; target.state.timeout-ms
+    page-evaluate-until; target, 'Promise.all(Array.from(document.images, i => i.decode())).then(() => document.fonts.ready).then(() => true)', true, assets-deadline
     top = millimetres-to-inches; printing.margin-top-mm
     bottom = millimetres-to-inches; printing.margin-bottom-mm
     left = millimetres-to-inches; printing.margin-left-mm
     right = millimetres-to-inches; printing.margin-right-mm
-    outcome binary-outcome = rust
-        match crate::chromium_backend::print_pdf(state.browser.as_ref().expect("checked open page"), &state.target_id,
-            printing.display_header_footer, printing.print_background,
-            printing.prefer_css_page_size, printing.expand_disclosures,
-            dimensions.width, dimensions.height, printing.landscape,
-            top, bottom, left, right, printing.scale,
-            printing.page_ranges.as_deref(), state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
-            Ok(data) => BinaryOutcome { data, error: String::new() },
-            Err(error) => BinaryOutcome { data: Vec::new(), error },
-        }
-    finish-operation; outcome.error
-    return move outcome.data
+    request = instance PrintToPDF;
+    request.landscape = printing.landscape
+    request.display-header-footer = printing.display-header-footer
+    request.print-background = printing.print-background
+    request.scale = printing.scale
+    request.paper-width = dimensions.width
+    request.paper-height = dimensions.height
+    request.margin-top = top
+    request.margin-bottom = bottom
+    request.margin-left = left
+    request.margin-right = right
+    request.page-ranges = printing.page-ranges
+    request.header-template = none
+    request.footer-template = none
+    request.prefer-css-page-size = printing.prefer-css-page-size
+    request.transfer-mode = none
+    request.generate-tagged-pdf = none
+    request.generate-document-outline = none
+    response = target.send-print; move request
+    encoded = ref response.data
+    decoded = decode-base64; encoded, false, true
+    if decoded.failed
+        throw chromium-error; decoded.message
+    return move decoded.value
 
-private function page-diagnostics document-value; state ref page-state
-    require-page; state
-    outcome operation-outcome = rust
-        match crate::chromium_backend::diagnostics(state.browser.as_ref().expect("checked open page"), &state.target_id, state.events.as_ref().expect("open page events"), state.injected_html, state.timeout_ms.to_string().parse::<u64>().expect("validated timeout")) {
-            Ok(value) => OperationOutcome { value, error: String::new() },
-            Err(error) => OperationOutcome { value: String::new(), error },
-        }
-    return decode-page-document; move outcome
+private function page-diagnostics document-value; target ref page
+    require-page; target.state
+    deadline = page-deadline; target.state.timeout-ms
+    # A fresh Runtime.evaluate is the available source-owned liveness check: headless-chrome's per-tab listener stream has no close notification.
+    document = page-evaluate-until; target, '({url:location.href,title:document.title,timing:performance.getEntriesByType("navigation")[0]?.toJSON() ?? null,resources:performance.getEntriesByType("resource").map(e=>e.toJSON())})', false, deadline
+    events = target.state.events
+    if events != none
+        return page-diagnostics-with-events; target, events, document
+    throw chromium-error; 'browser diagnostic capture stopped'
+
+private function page-diagnostics-with-events document-value; target ref page, captured ref event-capture, document ref document-value
+    batch = captured.statistics.drain;
+    batch.materialize-errors;
+    dropped = batch.dropped
+    capacity-reached = batch.capacity-reached
+    records = move batch.records
+    timing = document-field; document, 'timing'
+    status = make-document-none;
+    if not target.state.injected-html
+        status = document-field; timing, 'responseStatus'
+        # Integer text is canonical signed decimal: compared with "0", its sign exactly tests positivity without narrowing or parsing.
+        if status.kind != 'integer' or status.integer.text <= '0'
+            status = make-document-none;
+        if status.kind == 'none'
+            target-url = document-field; timing, 'name'
+            index = records.length - 1
+            while index >= 0
+                record = ref records[index]
+                kind = document-field; record, 'kind'
+                resource-type = document-field; record, 'resource-type'
+                event-url = document-field; record, 'url'
+                event-status = document-field; record, 'status'
+                if kind.kind == 'string' and kind.scalar == 'response' and resource-type.kind == 'string' and resource-type.scalar == 'Document' and target-url.kind == 'string' and event-url.kind == 'string' and event-url.scalar == target-url.scalar and event-status.kind == 'integer' and event-status.integer.text > '0'
+                    status = event-status
+                    break
+                index = index - 1
+    event-list = make-document-list; records
+    if event-list.failed
+        throw chromium-error; 'could not construct browser diagnostics'
+    entries = instance document-map-entries;
+    entries.append; 'url', (document-field; document, 'url')
+    entries.append; 'title', (document-field; document, 'title')
+    entries.append; 'status', status
+    entries.append; 'navigation-timing', timing
+    entries.append; 'resource-timings', (document-field; document, 'resources')
+    entries.append; 'events', event-list.value
+    entries.append; 'capacity-reached', (make-document-bool; capacity-reached)
+    lost = make-document-integer; (dropped.to-string;)
+    if lost.failed
+        throw chromium-error; lost.message
+    entries.append; 'dropped-events', lost.value
+    result = make-document-map; entries
+    if result.failed
+        throw chromium-error; 'could not construct browser diagnostics'
+    return move result.value
 
 private function page-close string; state ref page-state
-    # Closing uses the same unprojectable native tab handle; source releases its
-    # owner slots even if close reports an error. Browser Drop is the backstop.
-    message string = rust
-        crate::chromium_backend::close(state.browser.as_ref().expect("checked open page"), &state.target_id).err().unwrap_or_default()
-    return move message
+    # Preserve source-owned cleanup in page.close, using the projected receiver
+    # and throwable boundary rather than a package-local native adapter.
+    tab = state.tab
+    if tab != none
+        try
+            tab.close; false
+        catch dependency-error as error
+            return error.message
+    return ''

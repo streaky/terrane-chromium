@@ -1,0 +1,184 @@
+namespace streaky/chromium
+
+from /core/documents import document-value, document-result, document-map-entries, make-document-map, make-document-string
+from /core/collections import list
+from /core/errors import throwable
+from /deps/headless-chrome/protocol/cdp/types import Event as native-event
+
+# Source string join accepts variadic arguments, not a dynamic list. Remove
+# this representation crossing when iterable joining projects; source owns the separator.
+private function join-event-arguments string; parts ref (list of string), separator ref string
+    return rust
+        parts.as_slice().join(separator)
+
+private class diagnostic-batch
+    records list of document-value
+    dropped int = 0
+    capacity-reached bool = false
+    capacity int
+    failure string|none = none
+    function construct; records list of document-value, dropped int, capacity-reached bool, capacity int, failure string|none
+        this.records = move records
+        this.dropped = dropped
+        this.capacity-reached = capacity-reached
+        this.capacity = capacity
+        this.failure = move failure
+    mutable function materialize-errors;
+        failure = this.failure
+        if failure != none
+            # Build the error document only after releasing the capture-state lock.
+            record = capture-error-record; move failure
+            if this.records.length >= this.capacity
+                this.records[this.capacity - 1] = move record
+            else
+                this.records.append; move record
+            this.failure = none
+
+# Normalization runs outside this short checked shared-state lock. The buffer
+# never waits for space and snapshot draining replaces storage atomically.
+private class capture-statistics
+    records list of document-value
+    capacity int = 1024
+    dropped int = 0
+    pending-dropped int = 0
+    pending-failure string|none = none
+    function construct; records list of document-value, capacity int
+        this.records = move records
+        this.capacity = capacity
+    mutable function enqueue; record document-value
+        if this.records.length >= this.capacity
+            this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
+        else
+            this.records.append; move record
+    mutable function record-failure; message string
+        if this.pending-failure == none
+            this.pending-failure = move message
+        else
+            this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
+    mutable function drain diagnostic-batch;
+        # Reserve one bounded event slot for a pending callback failure. If full,
+        # replacing its last record is an explicitly counted drop, not batch loss.
+        if this.pending-failure != none and this.records.length >= this.capacity
+            this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
+        batch = instance diagnostic-batch; records = this.records, dropped = this.dropped, capacity-reached = this.records.length >= this.capacity or this.pending-dropped > 0, capacity = this.capacity, failure = this.pending-failure
+        empty list of document-value = list;
+        this.records = move empty
+        this.pending-dropped = 0
+        this.pending-failure = none
+        return move batch
+
+
+# Event itself is Deserialize-only. Extract its borrowed serializable payload
+# without cloning it or opening another connection. Codes are private discriminants.
+private class native-event-payload
+    kind int32 = 0
+    params document-result
+    function construct; kind int32, params document-result
+        this.kind = kind
+        this.params = move params
+
+private function event-payload (native-event-payload)|none; event ref native-event
+    return rust
+        macro_rules! payload {
+            ($kind:literal, $params:expr) => {{
+                let raw = terrane_document_support::serialize_document($params);
+                Some(NativeEventPayload::terrane_construct($kind,
+                    DocumentResult::terrane_construct(raw.failed, raw.message.clone(), raw.path.clone(), raw.expected.clone(), raw)))
+            }};
+        }
+        use headless_chrome::protocol::cdp::types::Event;
+        match event {
+            Event::RuntimeConsoleAPICalled(value) => payload!(1, &value.params),
+            Event::RuntimeExceptionThrown(value) => payload!(2, &value.params),
+            Event::NetworkRequestWillBeSent(value) => payload!(3, &value.params),
+            Event::NetworkResponseReceived(value) => payload!(4, &value.params),
+            Event::NetworkLoadingFailed(value) => payload!(5, &value.params),
+            _ => None,
+        }
+
+private function document-from-native-json document-result; value ref native-json-value
+    # Explicit JSON Value adaptation preserves feature-private exact numbers.
+    return rust
+        let raw = terrane_document_support::serialize_json_value(value);
+        DocumentResult::terrane_construct(raw.failed, raw.message.clone(), raw.path.clone(), raw.expected.clone(), raw)
+
+private function finish-event document-value; entries document-map-entries
+    result = make-document-map; move entries
+    if result.failed
+        throw chromium-error; result.message
+    return move result.value
+
+private function capture-error-record document-value; message string
+    entries = instance document-map-entries;
+    entries.append; 'kind', (make-document-string; 'capture-error')
+    entries.append; 'message', (make-document-string; move message)
+    return finish-event; move entries
+
+private function normalize-event document-value|none; event ref native-event
+    payload = event-payload; event
+    if payload != none
+        return normalize-event-payload; payload
+    return none
+
+private function normalize-event-payload document-value; payload ref native-event-payload
+    converted = ref payload.params
+    if converted.failed
+        return capture-error-record; converted.message
+    params = ref converted.value
+    kind = payload.kind
+    entries = instance document-map-entries;
+    entries.append; 'timestamp', (document-field; params, 'timestamp')
+    switch
+        case kind == 1
+            entries.append; 'kind', (make-document-string; 'console')
+            entries.append; 'level', (document-field; params, 'type')
+            args = document-field; params, 'args'
+            parts list of string = list;
+            separator = ' '
+            index int = 0
+            count = args.length;
+            while index < count
+                argument = args.item; index
+                value = argument.value.field; 'value'
+                if not value.failed
+                    if value.value.kind == 'string'
+                        parts.append; value.value.scalar
+                    else
+                        parts.append; value.value.encoded
+                else
+                    description = document-field; argument.value, 'description'
+                    if description.kind == 'string'
+                        parts.append; description.scalar
+                    else
+                        parts.append; (document-field; argument.value, 'type').scalar
+                index = index + 1
+            entries.append; 'message', (make-document-string; (join-event-arguments; parts, separator))
+        case kind == 2
+            entries.append; 'kind', (make-document-string; 'javascript-error')
+            details = document-field; params, 'exceptionDetails'
+            exception = document-field; details, 'exception'
+            description = document-field; exception, 'description'
+            if description.kind != 'string'
+                description = document-field; details, 'text'
+            entries.append; 'message', description
+        case kind == 3
+            entries.append; 'kind', (make-document-string; 'request')
+            request = document-field; params, 'request'
+            entries.append; 'url', (document-field; request, 'url')
+            entries.append; 'request-id', (document-field; params, 'requestId')
+        case kind == 4
+            entries.append; 'kind', (make-document-string; 'response')
+            response = document-field; params, 'response'
+            entries.append; 'url', (document-field; response, 'url')
+            entries.append; 'status', (document-field; response, 'status')
+            entries.append; 'resource-type', (document-field; params, 'type')
+            entries.append; 'request-id', (document-field; params, 'requestId')
+        case kind == 5
+            entries.append; 'kind', (make-document-string; 'request-failed')
+            entries.append; 'message', (document-field; params, 'errorText')
+            entries.append; 'request-id', (document-field; params, 'requestId')
+    return finish-event; move entries
+

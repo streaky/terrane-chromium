@@ -29,7 +29,7 @@ Choose the path relative to the consuming package manifest. This is an ordinary 
 
 ## Managed page API
 
-The public page API is documented in the [manual reference](docs/src/records/api/page.yaml). `open-page` accepts `browser-options` and `viewport-options`, returning a managed page. Configure browser `executable` (default `none` for discovery), `timeout-ms` (30000), and bounded `diagnostic-capacity` (1000). Viewport defaults are 1280×720 at device scale factor 1.0.
+The page API is documented in the [manual reference](docs/src/records/api/page.yaml). `open-page` accepts `browser-options` and `viewport-options`, returning a managed page. Configure browser `executable` (default `none` for system discovery), `timeout-ms` (30000), and bounded `diagnostic-capacity` (1000). Viewport defaults are 1280×720 at device scale factor 1.0. Launch configuration is built in source using the upstream `LaunchOptions` defaults; startup errors become `chromium-error`, and partial startup is cleaned up by ordinary ownership destruction.
 
 The page supports URL navigation and HTML installation with load readiness options, viewport changes, selector/expression waits, JSON-compatible evaluation, PNG/JPEG screenshots, PDF printing, diagnostics, and idempotent close. `is-open` is the only operation that does not throw `chromium-error`; close is safe to repeat. Page cleanup also follows final shared ownership destruction. Evaluation exceptions, rejected promises, undefined and other non-JSON results are errors. PDF paper sizes, custom paired dimensions, margins, scale, orientation, page ranges, CSS precedence, and print-media behavior are detailed in the manual reference.
 
@@ -43,11 +43,23 @@ No page clicking/typing, multi-page automation, downloads, raw CDP, or complete 
 
 ## Native boundary
 
-Public types belong to `streaky/chromium`; native browser and tab handles are private. The maintained backend accounts for browser launch lifetime inputs, opaque `Arc<Tab>` handles, and generic CDP/associated responses not expressible through current projection. These are projection limitations, not policy requirements; native code should be removed when the relevant calls and responses can be expressed through source. It is not retained to avoid short-lived clones.
+Public types belong to `streaky/chromium`; native browser and tab handles are private. Terrane retains the `Arc<Tab>` returned at page creation. Navigation, typed CDP requests/responses, readiness, evaluation, viewport/screenshot capture, printing, and diagnostic aggregation are package source policy, not Rust adapters.
+
+The private associated-type contract binds each operation to its projected response type. Source methods call the retained tab's generic CDP operation directly; no request wrapper allocation or packed numeric argument vector mediates that relationship. Evaluation converts a borrowed native JSON value directly into a document through the explicit JSON adapter, without serializing and reparsing it.
+
+Source constructs `LaunchOptions` with the pinned upstream defaults and calls `Browser::new`; managed page state owns the browser, fresh tab, retained listener token and checked shared diagnostic buffer. The fresh tab avoids Chrome's privileged new-tab CSP, which blocks scripts in installed HTML. Executable discovery is projected and retains its native error; a small inline conversion maps executable text to owned `PathBuf`. Remove it when path construction projects.
+
+Browser wall-clock and sleep primitives remain because the native `Instant` is opaque and `/core/time` is virtual under the native test runner. Remove those primitives when a projected host clock/sleep path exists. No retained Rust operation exists to avoid short-lived clones.
 
 The backend uses `headless_chrome` 1.0.22. Native types are not part of the public API.
 
-The private `rust/events.rs` observer handles an upstream event-parser incompatibility with Terrane's exact-number JSON features: fractional timestamps otherwise cause console/network events to be silently discarded. It parses a local, target-scoped CDP event stream as JSON values without changing document-number semantics. This compatibility bridge and its removal criteria are documented beside the implementation; it is not a public raw-CDP API.
+Typed events now arrive through the retained tab's native listener. The exact native `Weak<dyn EventListener<Event> + Send + Sync>` registration token is retained and passed back for removal. There is no additional CDP socket, polling worker, maintained Rust module, or direct WebSocket dependency.
+
+`src/events.trn` owns event selection/normalization and bounded buffering. Normalization occurs outside the short checked shared-state lock; insertion never waits for buffer space, and a full buffer rejects the new record and increments the cumulative `dropped-events` count. Draining atomically replaces the buffer. Capture failures remain visible to `diagnostics`; explicit close removes the listener before releasing the tab/browser.
+
+The remaining inline event crossings extract borrowed serializable variant payloads (the upstream `Event` enum is Deserialize-only), adapt native JSON values, join a dynamic string list, and check weak-token liveness. Each has its local capability/removal rationale. No event is cloned or stringified and reparsed at this boundary.
+
+The document runtime preserves exact numbers without enabling Serde JSON's private-number feature. The resolved upstream graph accepts fractional typed event timestamps such as `123.456`; console/network delivery is covered by real-browser tests. Upstream still invokes listeners while holding its registration mutex: callbacks must not reenter listener add/remove or issue blocking browser operations. Our callback only normalizes and enqueues.
 
 
 ## Development
