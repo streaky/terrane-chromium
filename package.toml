@@ -5,27 +5,20 @@ rust-toolchain = "pinned"
 [namespaces]
 "streaky/chromium" = "src"
 
-[rust-modules]
-chromium_backend = "rust/backend.rs"
-chromium_events = "rust/events.rs"
+# Supplies the projected standard Duration constructor used by browser timeouts.
+[rust-dependencies.crossbeam-channel]
+version = "=0.5.17"
+effects = ["threads"]
 
 [rust-dependencies.headless-chrome]
 package = "headless_chrome"
 version = "=1.0.22"
 effects = ["filesystem", "process", "threads", "networking", "build"]
 
-[rust-dependencies.crossbeam-channel]
-version = "=0.5.17"
-effects = ["threads"]
-
 [rust-dependencies.serde-json]
 package = "serde_json"
 version = "=1.0.154"
 effects = ["build"]
-
-[rust-dependencies.tungstenite]
-version = "=0.29.0"
-effects = ["networking", "threads", "build"]
 
 [profile]
 capabilities = ["filesystem", "process", "threads", "networking", "build"]

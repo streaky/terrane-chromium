@@ -877,16 +877,12 @@ name = "terrane_dependency_projection"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bytes",
  "crossbeam-channel",
  "headless_chrome",
- "http",
- "httparse",
  "ppv-lite86",
  "serde_core",
  "serde_json",
  "tempfile",
- "tungstenite",
  "url",
 ]
 

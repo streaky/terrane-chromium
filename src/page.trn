@@ -4,12 +4,13 @@ from /core/documents import document-value
 from /core/documents/json import parse-json, default-json-options
 from /core/codecs import decode-base64
 from /core/collections import list
-from /core/documents import document-map-entries, make-document-none, make-document-list, make-document-map, make-document-bool
+from /core/documents import document-map-entries, make-document-none, make-document-list, make-document-map, make-document-bool, make-document-integer
 from /core/errors import dependency-error, throwable, integer-conversion-overflow, coercion-error, index-error
 from /deps/headless-chrome import LaunchOptions as native-launch-options
 from /deps/headless-chrome import Browser as native-browser
 from /deps/headless-chrome import Arc-of-headless-chrome-Tab as native-tab
-from /deps/crossbeam-channel import Receiver as native-event-receiver
+from /deps/headless-chrome import Weak as native-listener-token
+from /deps/headless-chrome/protocol/cdp/types import Event as native-event
 from /deps/headless-chrome import PathBuf as native-pathbuf
 from /deps/crossbeam-channel import Duration as native-duration
 from /deps/headless-chrome/browser import default_executable as default-executable
@@ -23,19 +24,15 @@ from /deps/headless-chrome/protocol/cdp/page import PrintToPDF, PrintToPDFReturn
 from /deps/headless-chrome/protocol/cdp/runtime import RemoteObjectSubtype
 from /deps/headless-chrome/protocol/cdp/runtime import Evaluate, EvaluateReturnObject
 from /deps/headless-chrome/protocol/cdp/emulation import SetDeviceMetricsOverride, SetDeviceMetricsOverrideReturnObject
-from /deps/serde-json import to_string as encode-native-json, Error as native-json-error
+from /deps/headless-chrome/protocol/cdp/network import Enable as native-network-enable, EnableReturnObject as native-network-enable-response
+from /deps/serde-json import Value as native-json-value
 
-# The retained event bridge returns a heterogeneous Rust tuple. Source tuples are
-# homogeneous; this stack record gives the inline crossing an exact source type.
-private class event-poll
-    text string|none = none
-    stopped bool = false
 
-# Private event-only Result carrier; remove with the retained native event bridge.
-# This is stack storage for the exact Receiver/error alternative, not launch policy.
 private class event-capture
-    receiver (native-event-receiver of string)|none = none
-    error string = ''
+    token native-listener-token|none = none
+    statistics shared ref capture-statistics
+    function construct; statistics shared ref capture-statistics
+        this.statistics = move statistics
 
 private owning interface cdp-client
     associated type navigation-response
@@ -46,6 +43,7 @@ private owning interface cdp-client
     associated type layout-response
     associated type screenshot-response
     associated type print-response
+    associated type network-enable-response
     private function send-navigation navigation-response throws throwable; request Navigate
     private function send-frame frame-response throws throwable; request GetFrameTree
     private function send-html html-response throws throwable; request SetDocumentContent
@@ -54,6 +52,7 @@ private owning interface cdp-client
     private function send-layout layout-response throws throwable; request GetLayoutMetrics
     private function send-screenshot screenshot-response throws throwable; request CaptureScreenshot
     private function send-print print-response throws throwable; request PrintToPDF
+    private function send-network-enable network-enable-response throws throwable; request native-network-enable
 
 public class viewport-options
     width int = 1280
@@ -73,7 +72,7 @@ public class screenshot-options
 private class page-state
     browser native-browser|none = none
     tab native-tab|none = none
-    events (native-event-receiver of string)|none = none
+    events event-capture|none = none
     timeout-ms int = 30000
     injected-html bool = true
     error string = ''
@@ -172,6 +171,7 @@ public class page implements cdp-client
     associated type layout-response = GetLayoutMetricsReturnObject
     associated type screenshot-response = CaptureScreenshotReturnObject
     associated type print-response = PrintToPDFReturnObject
+    associated type network-enable-response = native-network-enable-response
     private state page-state
 
     private function construct; state page-state
@@ -208,6 +208,16 @@ public class page implements cdp-client
     private function send-print print-response throws throwable; request PrintToPDF
         tab = page-tab; this.state
         return tab.call_method; move request
+    private function send-network-enable network-enable-response throws throwable; request native-network-enable
+        tab = page-tab; this.state
+        return tab.call_method; move request
+
+    private function enable-diagnostic-domains;
+        tab = page-tab; this.state
+        tab.enable_runtime;
+        request = instance native-network-enable; max-total-buffer-size = none, max-resource-buffer-size = none, max-post-data-size = none, report-direct-socket-traffic = none, enable-durable-messages = none
+        this.send-network-enable; move request
+
 
 
     function is-open bool;
@@ -309,37 +319,53 @@ public class page implements cdp-client
     mutable function close;
         if this.state.browser == none
             return
+        release-message = release-events; this.state
         message = page-close; this.state
         this.state.events = none
         this.state.tab = none
         this.state.browser = none
+        finish-operation; move release-message
         finish-operation; move message
 
     function destruct;
         # Source owns the browser, tab and event receiver. Native Drop cleans up
         # on errors/scope exit; explicit close additionally reports CDP errors.
+        # Destruction cannot report cleanup errors; explicit close reports both
+        # listener removal and CDP errors after still releasing native ownership.
+        _ = release-events; this.state
         this.state.events = none
         this.state.tab = none
         this.state.browser = none
 
-# The private event setup bridge owns its native channel and error conversion.
-# Retained callbacks and typed event policy still use chromium_events::capture;
-# remove this crossing when that event ownership contract projects directly.
-private function capture-events (native-event-receiver of string) throws chromium-error; owner ref native-browser, tab ref native-tab, capacity uint64, timeout uint64
-    result event-capture = rust
-        let captured = usize::try_from(capacity)
-            .map_err(|_| "invalid diagnostic capacity".to_owned())
-            .and_then(|capacity| crate::chromium_events::capture(
-                &owner.get_ws_url(), tab.get_target_id(), capacity, timeout,
-            ));
-        match captured {
-            Ok(receiver) => EventCapture { receiver: Some(receiver), error: String::new() },
-            Err(error) => EventCapture { receiver: None, error },
-        }
-    captured = move result.receiver
+# The callback does no CDP work: upstream invokes it under its registry lock.
+# Removal runs outside callbacks and preserves the exact native Weak identity.
+private function capture-events event-capture; tab ref native-tab, capacity int
+    empty list of document-value = list;
+    statistics = shared ref (instance capture-statistics; records = move empty, capacity = capacity)
+    listener = function; event ref native-event
+        try
+            record = normalize-event; event
+            if record != none
+                statistics.enqueue; move record
+        catch throwable as error
+            statistics.failure = error.message
+    token = tab.add_event_listener; move listener
+    captured = instance event-capture; statistics = statistics
+    captured.token = move token
+    return move captured
+
+private function release-events string; state ref page-state
+    captured = state.events
+    tab = state.tab
     if captured != none
-        return move captured
-    throw chromium-error; move result.error
+        if tab != none
+            token = captured.token
+            if token != none
+                try
+                    tab.remove_event_listener; token
+                catch throwable as error
+                    return error.message
+    return ''
 
 public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
     validate-viewport; viewport
@@ -348,10 +374,8 @@ public function open-page shared ref page; browser ref browser-options, viewport
     if browser.diagnostic-capacity <= 0 or browser.diagnostic-capacity > 2147483647
         throw chromium-error; 'diagnostic capacity must be a positive 32-bit count'
     timeout uint64 = 0
-    capacity uint64 = 0
     try
         timeout = browser.timeout-ms
-        capacity = browser.diagnostic-capacity
     catch integer-conversion-overflow as error
         throw chromium-error; move error.message
     launch-path native-pathbuf|none = none
@@ -375,13 +399,14 @@ public function open-page shared ref page; browser ref browser-options, viewport
         # A fresh tab avoids Chrome's privileged new-tab CSP blocking scripts in installed HTML.
         tab native-tab = owner.new_tab;
         tab.set_default_timeout; move tab-timeout
-        events = capture-events; owner, tab, capacity, timeout
+        events = capture-events; tab, browser.diagnostic-capacity
         state = instance page-state;
         state.browser = move owner
         state.tab = move tab
         state.events = move events
         state.timeout-ms = browser.timeout-ms
         managed = instance page; move state
+        managed.enable-diagnostic-domains;
         managed.set-viewport; viewport
         return shared ref managed
     catch dependency-error as error
@@ -489,11 +514,10 @@ private function page-evaluate-until document-value; target ref page, expression
             throw chromium-error; 'JavaScript returned a non-JSON object or an unawaited promise'
     value = ref remote.value
     if value != none
-        try
-            text = encode-native-json; value
-            return decode-browser-json; text
-        catch native-json-error as error
-            throw chromium-error; 'JavaScript JSON serialization failed: ' + error.message
+        converted = document-from-native-json; value
+        if converted.failed
+            throw chromium-error; 'JavaScript JSON conversion failed: ' + converted.message
+        return move converted.value
     if subtype != none
         if subtype == (RemoteObjectSubtype::Null;)
             return make-document-none;
@@ -608,42 +632,34 @@ private function page-diagnostics document-value; target ref page
         return page-diagnostics-with-events; target, events, document
     throw chromium-error; 'browser diagnostic capture stopped'
 
-private function page-diagnostics-with-events document-value; target ref page, events ref (native-event-receiver of string), document ref document-value
-    available int = events.len;
-    capacity int|none = events.capacity;
-    capacity-reached bool = false
-    if capacity != none
-        capacity-reached = capacity == available
-    records list of document-value = list;
-    to-read = available
-    if to-read == 0
-        to-read = 1
+# Weak::upgrade is a native liveness check, not callback invocation or removal.
+# Remove this crossing when the closed weak owner's upgrade method projects.
+private function listener-stopped bool; token ref native-listener-token
+    return rust
+        token.upgrade().is_none()
+
+private function page-diagnostics-with-events document-value; target ref page, captured ref event-capture, document ref document-value
+    token = captured.token
+    statistics = captured.statistics
+    stopped bool = true
+    if token != none
+        stopped = listener-stopped; token
+    if stopped
+        throw chromium-error; 'browser diagnostic capture stopped'
+    batch = statistics.drain;
+    if batch.failure != ''
+        throw chromium-error; 'browser diagnostic capture failed: ' + batch.failure
+    dropped = batch.dropped
+    capacity-reached = batch.capacity-reached
+    records = move batch.records
     index int = 0
-    while index < to-read
-        polled event-poll = rust
-            {
-                let (text, stopped) = crate::chromium_backend::poll_event(events);
-                EventPoll { text, stopped }
-            }
-        if polled.stopped
-            throw chromium-error; 'browser diagnostic capture stopped'
-        event-text string|none = rust
-            polled.text
-        if event-text != none
-            parsed = parse-json; move event-text, (default-json-options;)
-            if parsed.failed
-                throw chromium-error; 'invalid diagnostic event: ' + parsed.message
-            event = move parsed.value
-            kind = document-field; event, 'kind'
-            if kind.scalar == 'capture-error'
-                detail = document-field; event, 'message'
-                throw chromium-error; 'browser diagnostic capture failed: ' + detail.scalar
-            records.append; move event
-            index = index + 1
-        else
-            if available > 0
-                throw chromium-error; 'browser diagnostic capture stopped'
-            break
+    while index < records.length
+        event = ref records[index]
+        kind = document-field; event, 'kind'
+        if kind.scalar == 'capture-error'
+            detail = document-field; event, 'message'
+            throw chromium-error; 'browser diagnostic capture failed: ' + detail.scalar
+        index = index + 1
     timing = document-field; document, 'timing'
     status = make-document-none;
     if not target.state.injected-html
@@ -675,6 +691,10 @@ private function page-diagnostics-with-events document-value; target ref page, e
     entries.append; 'resource-timings', (document-field; document, 'resources')
     entries.append; 'events', event-list.value
     entries.append; 'capacity-reached', (make-document-bool; capacity-reached)
+    lost = make-document-integer; (dropped.to-string;)
+    if lost.failed
+        throw chromium-error; lost.message
+    entries.append; 'dropped-events', lost.value
     result = make-document-map; entries
     if result.failed
         throw chromium-error; 'could not construct browser diagnostics'
