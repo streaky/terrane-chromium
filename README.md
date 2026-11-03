@@ -33,7 +33,17 @@ The page API is documented in the [manual reference](docs/src/records/api/page.y
 
 The page supports URL navigation and HTML installation with load readiness options, viewport changes, selector/expression waits, JSON-compatible evaluation, PNG/JPEG screenshots, PDF printing, diagnostics, and idempotent close. `is-open` is the only operation that does not throw `chromium-error`; close is safe to repeat. Page cleanup also follows final shared ownership destruction. Evaluation exceptions, rejected promises, undefined and other non-JSON results are errors. PDF paper sizes, custom paired dimensions, margins, scale, orientation, page ranges, CSS precedence, and print-media behavior are detailed in the manual reference.
 
-Full-page screenshot captures the current document extent, not all lazy or infinite-scroll content. Use page evaluation and application-specific waits to prepare content; no universal exhaustion guarantee exists. Diagnostics drain bounded best-effort events and are not a complete waterfall, HAR, or audit log.
+Full-page screenshot captures the current document extent, not all lazy or infinite-scroll content. Use page evaluation and application-specific waits to prepare content; no universal exhaustion guarantee exists.
+
+## Diagnostics and recovery
+
+`diagnostics` returns page metadata, navigation/resource timings, the main HTTP status when observed, and normalized console, JavaScript-error, request, response, request-failed, and `capture-error` events. HTML installation has no HTTP status; HTTP status codes do not themselves determine whether navigation succeeds or fails. Capture is bounded and best-effort, not a complete waterfall, HAR, or audit log.
+
+Each call atomically drains the event buffer. A full buffer rejects new records without waiting for space. `capacity-reached` describes the just-drained batch and can clear on a later drain; `dropped-events` remains cumulative for the page lifetime and does not count events lost upstream.
+
+Normalization failures and callback exceptions become drainable `capture-error` records rather than permanently failing subsequent diagnostics. Callback exceptions share a bounded first-failure slot, reset with each drain. If the batch is full, that error replaces its last record and the displacement counts as a drop; further exceptions while the slot is occupied also count as drops. Native event payload conversion has a fixed **16 MiB (16,777,216-byte) encoding budget**. Exceeding it produces a `capture-error`, not a truncated payload.
+
+Diagnostics also performs a live CDP evaluation: dependency failures, including an unexpectedly closed browser connection, surface as `chromium-error`. There is no independent disconnect notification or transport-health monitor; `is-open` describes local page ownership, not whether the native connection is still healthy.
 
 ## Security
 
@@ -55,12 +65,11 @@ The backend uses `headless_chrome` 1.0.22. Native types are not part of the publ
 
 Typed events now arrive through the retained tab's native listener. The exact native `Weak<dyn EventListener<Event> + Send + Sync>` registration token is retained and passed back for removal. There is no additional CDP socket, polling worker, maintained Rust module, or direct WebSocket dependency.
 
-`src/events.trn` owns event selection/normalization and bounded buffering. Normalization occurs outside the short checked shared-state lock; insertion never waits for buffer space, and a full buffer rejects the new record and increments the cumulative `dropped-events` count. Draining atomically replaces the buffer. Capture failures remain visible to `diagnostics`; explicit close removes the listener before releasing the tab/browser.
+`src/events.trn` owns event selection/normalization and bounded buffering. Normalization occurs outside the short checked shared-state lock; callback error documents are also materialized after releasing that lock. Explicit close removes the listener before releasing the tab/browser. Buffer limits and recovery semantics are described under [Diagnostics and recovery](#diagnostics-and-recovery).
 
 The remaining inline event crossings extract borrowed serializable variant payloads (the upstream `Event` enum is Deserialize-only), adapt native JSON values, join a dynamic string list, and check weak-token liveness. Each has its local capability/removal rationale. No event is cloned or stringified and reparsed at this boundary.
 
 The document runtime preserves exact numbers without enabling Serde JSON's private-number feature. The resolved upstream graph accepts fractional typed event timestamps such as `123.456`; console/network delivery is covered by real-browser tests. Upstream still invokes listeners while holding its registration mutex: callbacks must not reenter listener add/remove or issue blocking browser operations. Our callback only normalizes and enqueues.
-
 
 ## Development
 
