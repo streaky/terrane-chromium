@@ -373,6 +373,7 @@ function test-diagnostic-buffer-is-bounded-and-recovers throws throwable;
         events = field-value; snapshot, 'events'
         assert-equal-bool; (document-length; events) <= 1, true
         dropped = field-value; snapshot, 'dropped-events'
+        # Integer document text is canonical signed decimal; this comparison tests positivity without treating arbitrary text as numeric.
         lost = dropped.integer.text > '0'
         if lost
             reached = field-value; snapshot, 'capacity-reached'
@@ -393,6 +394,11 @@ function test-diagnostic-buffer-is-bounded-and-recovers throws throwable;
                 observed = true
         if (host-milliseconds;) - started >= 5000 and not observed
             test-fail; 'diagnostic buffer did not accept events after draining'
+    snapshot = page.diagnostics;
+    dropped = field-value; snapshot, 'dropped-events'
+    assert-equal-bool; dropped.integer.text > '0', true
+    reached = field-value; snapshot, 'capacity-reached'
+    assert-equal-string; reached.scalar, 'false'
     page.close;
 
 private function isolated-console bool; snapshot ref document-value, expected string, forbidden string

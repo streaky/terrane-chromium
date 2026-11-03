@@ -1,0 +1,43 @@
+namespace streaky/chromium
+from /core/testing import assert-equal-int, assert-equal-string, assert-equal-bool
+from /core/documents import document-value, make-document-string
+from /core/collections import list
+function test-capture-errors-drain-and-recover;
+    empty list of document-value = list;
+    statistics = instance capture-statistics; records = empty, capacity = 3
+    statistics.enqueue; (capture-error-record; 'normalization failed')
+    statistics.enqueue; (make-document-string; 'retained')
+    statistics.record-failure; 'callback failed'
+    batch = statistics.drain;
+    batch.materialize-errors;
+    assert-equal-int; batch.records.length, 3
+    kind = batch.records[0].field; 'kind'
+    assert-equal-string; kind.value.scalar, 'capture-error'
+    assert-equal-string; batch.records[1].scalar, 'retained'
+    failure = batch.records[2].field; 'message'
+    assert-equal-string; failure.value.scalar, 'callback failed'
+    statistics.enqueue; (make-document-string; 'recovered')
+    next = statistics.drain;
+    next.materialize-errors;
+    assert-equal-int; next.records.length, 1
+    assert-equal-string; next.records[0].scalar, 'recovered'
+    assert-equal-bool; next.capacity-reached, false
+    statistics.enqueue; (make-document-string; 'first')
+    statistics.enqueue; (make-document-string; 'second')
+    statistics.enqueue; (make-document-string; 'displaced')
+    statistics.record-failure; 'first callback failure'
+    statistics.record-failure; 'second callback failure'
+    full = statistics.drain;
+    full.materialize-errors;
+    assert-equal-int; full.records.length, 3
+    assert-equal-int; full.dropped, 2
+    assert-equal-bool; full.capacity-reached, true
+    assert-equal-string; full.records[0].scalar, 'first'
+    assert-equal-string; full.records[1].scalar, 'second'
+    failure = full.records[2].field; 'message'
+    assert-equal-string; failure.value.scalar, 'first callback failure'
+    drained = statistics.drain;
+    drained.materialize-errors;
+    assert-equal-int; drained.records.length, 0
+    assert-equal-int; drained.dropped, 2
+    assert-equal-bool; drained.capacity-reached, false

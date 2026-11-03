@@ -15,11 +15,24 @@ private class diagnostic-batch
     records list of document-value
     dropped int = 0
     capacity-reached bool = false
-    failure string = ''
-    function construct; records list of document-value, dropped int, capacity-reached bool
+    capacity int
+    failure string|none = none
+    function construct; records list of document-value, dropped int, capacity-reached bool, capacity int, failure string|none
         this.records = move records
         this.dropped = dropped
         this.capacity-reached = capacity-reached
+        this.capacity = capacity
+        this.failure = move failure
+    mutable function materialize-errors;
+        failure = this.failure
+        if failure != none
+            # Build the error document only after releasing the capture-state lock.
+            record = capture-error-record; move failure
+            if this.records.length >= this.capacity
+                this.records[this.capacity - 1] = move record
+            else
+                this.records.append; move record
+            this.failure = none
 
 # Normalization runs outside this short checked shared-state lock. The buffer
 # never waits for space and snapshot draining replaces storage atomically.
@@ -27,21 +40,36 @@ private class capture-statistics
     records list of document-value
     capacity int = 1024
     dropped int = 0
-    failure string = ''
+    pending-dropped int = 0
+    pending-failure string|none = none
     function construct; records list of document-value, capacity int
         this.records = move records
         this.capacity = capacity
     mutable function enqueue; record document-value
         if this.records.length >= this.capacity
             this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
         else
             this.records.append; move record
+    mutable function record-failure; message string
+        if this.pending-failure == none
+            this.pending-failure = move message
+        else
+            this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
     mutable function drain diagnostic-batch;
-        batch = instance diagnostic-batch; records = this.records, dropped = this.dropped, capacity-reached = this.records.length >= this.capacity or this.dropped > 0
-        batch.failure = this.failure
+        # Reserve one bounded event slot for a pending callback failure. If full,
+        # replacing its last record is an explicitly counted drop, not batch loss.
+        if this.pending-failure != none and this.records.length >= this.capacity
+            this.dropped = this.dropped + 1
+            this.pending-dropped = this.pending-dropped + 1
+        batch = instance diagnostic-batch; records = this.records, dropped = this.dropped, capacity-reached = this.records.length >= this.capacity or this.pending-dropped > 0, capacity = this.capacity, failure = this.pending-failure
         empty list of document-value = list;
         this.records = move empty
+        this.pending-dropped = 0
+        this.pending-failure = none
         return move batch
+
 
 # Event itself is Deserialize-only. Extract its borrowed serializable payload
 # without cloning it or opening another connection. Codes are private discriminants.

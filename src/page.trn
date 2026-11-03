@@ -348,7 +348,7 @@ private function capture-events event-capture; tab ref native-tab, capacity int
             if record != none
                 statistics.enqueue; move record
         catch throwable as error
-            statistics.failure = error.message
+            statistics.record-failure; error.message
     token = tab.add_event_listener; move listener
     captured = instance event-capture; statistics = statistics
     captured.token = move token
@@ -626,40 +626,19 @@ private function page-print bytes; target ref page, printing ref pdf-options
 private function page-diagnostics document-value; target ref page
     require-page; target.state
     deadline = page-deadline; target.state.timeout-ms
+    # A fresh Runtime.evaluate is the available source-owned liveness check: headless-chrome's per-tab listener stream has no close notification.
     document = page-evaluate-until; target, '({url:location.href,title:document.title,timing:performance.getEntriesByType("navigation")[0]?.toJSON() ?? null,resources:performance.getEntriesByType("resource").map(e=>e.toJSON())})', false, deadline
     events = target.state.events
     if events != none
         return page-diagnostics-with-events; target, events, document
     throw chromium-error; 'browser diagnostic capture stopped'
 
-# Weak::upgrade is a native liveness check, not callback invocation or removal.
-# Remove this crossing when the closed weak owner's upgrade method projects.
-private function listener-stopped bool; token ref native-listener-token
-    return rust
-        token.upgrade().is_none()
-
 private function page-diagnostics-with-events document-value; target ref page, captured ref event-capture, document ref document-value
-    token = captured.token
-    statistics = captured.statistics
-    stopped bool = true
-    if token != none
-        stopped = listener-stopped; token
-    if stopped
-        throw chromium-error; 'browser diagnostic capture stopped'
-    batch = statistics.drain;
-    if batch.failure != ''
-        throw chromium-error; 'browser diagnostic capture failed: ' + batch.failure
+    batch = captured.statistics.drain;
+    batch.materialize-errors;
     dropped = batch.dropped
     capacity-reached = batch.capacity-reached
     records = move batch.records
-    index int = 0
-    while index < records.length
-        event = ref records[index]
-        kind = document-field; event, 'kind'
-        if kind.scalar == 'capture-error'
-            detail = document-field; event, 'message'
-            throw chromium-error; 'browser diagnostic capture failed: ' + detail.scalar
-        index = index + 1
     timing = document-field; document, 'timing'
     status = make-document-none;
     if not target.state.injected-html
