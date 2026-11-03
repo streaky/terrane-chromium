@@ -195,6 +195,9 @@ documentation:
         When the event batch is already full, the pending error replaces its last
         record and that displacement increments the drop count; further callback
         failures while the slot is occupied are also counted as drops.
+        Native event payload conversion has a fixed 16 MiB (16,777,216-byte)
+        encoding budget. Exceeding it produces a drainable `capture-error` record,
+        not a truncated payload, and does not poison later diagnostics.
         Other records in the batch remain available. `is-open` describes local
         page ownership, not an independently monitored transport-health signal.
         Native tab construction enables the Page domain; source enables Runtime
