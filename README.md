@@ -55,6 +55,16 @@ The backend uses `headless_chrome` 1.0.22. Native types are not part of the publ
 
 The private `rust/events.rs` observer handles an upstream event-parser incompatibility with Terrane's exact-number JSON features: fractional timestamps otherwise cause console/network events to be silently discarded. It parses a local, target-scoped CDP event stream as JSON values without changing document-number semantics. This compatibility bridge and its removal criteria are documented beside the implementation; it is not a public raw-CDP API.
 
+Retained callback/carrier projection is available, but it does not by itself make
+upstream event decoding compatible. A probe in this package's resolved dependency
+graph accepts the raw JSON event with timestamp `123.456`, while decoding it as
+`headless_chrome::protocol::cdp::types::Event` rejects it with
+`invalid type: map, expected f64`. The observer therefore remains until the JSON
+boundary and native event decoding are repaired and actual fractional-timestamp
+console/network delivery passes. Upstream also invokes listeners while holding its
+registration mutex; its add/remove operations must not be called reentrantly from
+a listener. Generic retained-callback support does not change that native contract.
+
 
 ## Development
 
