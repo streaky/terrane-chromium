@@ -1,7 +1,6 @@
 namespace streaky/chromium
 
 from /core/documents import document-value, make-document-none, make-document-string
-from /core/documents/json import parse-json, default-json-options
 
 # Browser work uses host time, including under the test runner's virtual core
 # clock. The exported native Instant owner is opaque to projection today. Keep
@@ -37,12 +36,6 @@ private function poll-delay; deadline int
 private function quote-js string; value ref string
     quoted = make-document-string; value
     return quoted.encoded
-
-private function decode-browser-json document-value; text string
-    parsed = parse-json; move text, (default-json-options;)
-    if parsed.failed
-        throw chromium-error; 'could not decode browser result: ' + parsed.message
-    return move parsed.value
 
 private function document-field document-value; value ref document-value, name string
     field = value.field; name
