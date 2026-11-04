@@ -1,7 +1,6 @@
 namespace streaky/chromium
 
-from /core/testing import
-    test-arguments, skip, assert-equal-bool
+from /core/testing import test-arguments, skip, assert-equal-bool
 from /core/errors import throwable
 from /core/process import exit, make-exit-status
 

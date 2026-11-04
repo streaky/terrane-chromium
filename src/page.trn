@@ -4,8 +4,7 @@ from /core/documents import
     document-value, document-map-entries, make-document-none,
     make-document-list, make-document-map, make-document-bool,
     make-document-integer
-from /core/documents/json import
-    parse-json, default-json-options
+from /core/documents/json import parse-json, default-json-options
 from /core/codecs import decode-base64
 from /core/collections import list
 from /core/errors import
