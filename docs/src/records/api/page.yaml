@@ -139,15 +139,19 @@ documentation:
       source: |-
         namespace app
 
-        from /streaky/chromium import browser-options, viewport-options, load-options, screenshot-options, open-page
+        from /streaky/chromium import
+            browser-options,
+            viewport-options,
+            load-options,
+            screenshot-options,
+            open-page
 
         function main;
             browser = instance browser-options;
             viewport = instance viewport-options;
             document = open-page; browser, viewport
             try
-                loading = instance load-options;
-                loading.ready-selector = 'main'
+                loading = instance load-options; { ready-selector = 'main' }
                 html = '<!doctype html><title>Report</title><main><h1>Report</h1></main>'
                 document.set-html; html, loading
                 expression = 'document.title'

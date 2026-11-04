@@ -1,6 +1,7 @@
 namespace streaky/chromium
 
-from /core/documents import document-value, make-document-none, make-document-string
+from /core/documents import
+    document-value, make-document-none, make-document-string
 
 # Browser work uses host time, including under the test runner's virtual core
 # clock. The exported native Instant owner is opaque to projection today. Keep

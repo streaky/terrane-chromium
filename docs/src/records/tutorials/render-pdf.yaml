@@ -35,17 +35,25 @@ documentation:
     source: |-
       namespace app
 
-      from /streaky/chromium import browser-options, pdf-options, render-pdf
-      from /core/filesystem import filesystem-capability, filesystem-write-atomic
+      from /streaky/chromium import
+          browser-options,
+          pdf-options,
+          render-pdf
+      from /core/filesystem import
+          filesystem-capability,
+          filesystem-write-atomic
       from /core/filesystem/paths import path
-      from /core/process import exit, make-exit-status
+      from /core/process import
+          exit,
+          make-exit-status
       from /core/streams import stderr
 
       function main;
           browser = instance browser-options;
-          printing = instance pdf-options;
-          printing.print-background = true
-          printing.prefer-css-page-size = true
+          printing = instance pdf-options; {
+              print-background = true
+              prefer-css-page-size = true
+          }
           html = '<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Report</title><style>@page { size: A4; margin: 20mm } body { font-family: sans-serif } pre { white-space: pre-wrap }</style></head><body><h1>Report</h1><p>Rendered directly from HTML.</p><pre>literal `backticks` stay code</pre><details><summary>Notes</summary><p>Optional details.</p></details></body></html>'
           data = render-pdf; html, browser, printing
           written = filesystem-write-atomic; (filesystem-capability;), (instance path; 'report.pdf'), move data

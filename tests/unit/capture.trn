@@ -1,7 +1,10 @@
 namespace streaky/chromium
-from /core/testing import assert-equal-int, assert-equal-string, assert-equal-bool
+
+from /core/testing import
+    assert-equal-int, assert-equal-string, assert-equal-bool
 from /core/documents import document-value, make-document-string
 from /core/collections import list
+
 function test-capture-errors-drain-and-recover;
     empty list of document-value = list;
     statistics = instance capture-statistics; records = empty, capacity = 3

@@ -1,18 +1,72 @@
 namespace streaky/chromium
 
-from /core/testing import assert
+from /core/testing import assert, assert-near
 from /core/errors import throwable
 
 function test-invalid-executable-raises-chromium-error none throws throwable;
     missing string = rust
         tempfile::tempdir().expect("create isolated browser fixture").path().join("missing-browser").to_string_lossy().into_owned()
-    browser = instance browser-options;
-    browser.executable = missing
+    browser = instance browser-options; { executable = missing }
     printing = instance pdf-options;
     html = '<!doctype html><p>Browser failure</p>'
     caught bool = false
     try
         render-pdf; html, browser, printing
+    catch chromium-error
+        caught = true
+    assert; caught
+    return none
+
+function assert-paper-dimension; actual float|none, expected float
+    if actual != none
+        assert-near; actual, expected, 0.000001
+    else
+        assert; false
+
+function test-pdf-paper-named-sizes none throws throwable;
+    printing = instance pdf-options;
+    printing.paper-size = 'A3'
+    dimensions = pdf-paper; printing
+    assert-paper-dimension; dimensions.width, 297.0 / 25.4
+    assert-paper-dimension; dimensions.height, 420.0 / 25.4
+    printing.paper-size = 'A4'
+    dimensions = pdf-paper; printing
+    assert-paper-dimension; dimensions.width, 210.0 / 25.4
+    assert-paper-dimension; dimensions.height, 297.0 / 25.4
+    printing.paper-size = 'A5'
+    dimensions = pdf-paper; printing
+    assert-paper-dimension; dimensions.width, 148.0 / 25.4
+    assert-paper-dimension; dimensions.height, 210.0 / 25.4
+    printing.paper-size = 'Letter'
+    dimensions = pdf-paper; printing
+    assert-paper-dimension; dimensions.width, 8.5
+    assert-paper-dimension; dimensions.height, 11.0
+    printing.paper-size = 'Legal'
+    dimensions = pdf-paper; printing
+    assert-paper-dimension; dimensions.width, 8.5
+    assert-paper-dimension; dimensions.height, 14.0
+    return none
+
+function test-pdf-paper-named-and-custom-size-conflict none throws throwable;
+    printing = instance pdf-options; {
+        paper-size = 'A4'
+        paper-width-mm = 210.0
+        paper-height-mm = 297.0
+    }
+    caught bool = false
+    try
+        _ = pdf-paper; printing
+    catch chromium-error
+        caught = true
+    assert; caught
+    return none
+
+function test-pdf-paper-unknown-size none throws throwable;
+    printing = instance pdf-options;
+    printing.paper-size = 'Tabloid'
+    caught bool = false
+    try
+        _ = pdf-paper; printing
     catch chromium-error
         caught = true
     assert; caught
