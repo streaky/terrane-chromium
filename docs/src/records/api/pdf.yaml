@@ -141,11 +141,16 @@ documentation:
       source: |-
         namespace app
 
-        from /streaky/chromium import browser-options, pdf-options, render-pdf, chromium-error
+        from /streaky/chromium import
+            browser-options,
+            pdf-options,
+            render-pdf,
+            chromium-error
 
         function main;
-            browser = instance browser-options;
-            browser.executable = '/definitely-missing-chromium/browser'
+            browser = instance browser-options; {
+                executable = '/definitely-missing-chromium/browser'
+            }
             printing = instance pdf-options;
             html = '<!doctype html><p>Report</p>'
             try

@@ -1,7 +1,10 @@
 namespace streaky/chromium
-from /core/testing import test-arguments, skip, assert-equal-bool
+
+from /core/testing import
+    test-arguments, skip, assert-equal-bool
 from /core/errors import throwable
 from /core/process import exit, make-exit-status
+
 function test-unexpected-target-close-is-a-typed-diagnostic-failure throws throwable;
     arguments = test-arguments;
     if arguments.length < 1 or not arguments[0].is-text
@@ -16,9 +19,10 @@ function test-unexpected-target-close-is-a-typed-diagnostic-failure throws throw
         } else { -1 }
     if child-status >= 0
         exit; (make-exit-status; child-status)
-    browser = instance browser-options;
-    browser.executable = arguments[0].text
-    browser.timeout-ms = 1000
+    browser = instance browser-options; {
+        executable = arguments[0].text
+        timeout-ms = 1000
+    }
     viewport = instance viewport-options;
     target = open-page; browser, viewport
     # Close the native target without the public source cleanup: the Weak

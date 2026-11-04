@@ -73,7 +73,7 @@ The document runtime preserves exact numbers without enabling Serde JSON's priva
 
 ## Development
 
-With `terrane` available on `PATH`, run from this package directory:
+Use a current `terrane` compiler with grouped selective imports and structured field-assignment blocks. With `terrane` available on `PATH`, run from this package directory:
 
 ```sh
 terrane check .

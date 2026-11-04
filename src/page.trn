@@ -1,30 +1,36 @@
 namespace streaky/chromium
 
-from /core/documents import document-value
-from /core/documents/json import parse-json, default-json-options
+from /core/documents import
+    document-value, document-map-entries, make-document-none,
+    make-document-list, make-document-map, make-document-bool,
+    make-document-integer
+from /core/documents/json import
+    parse-json, default-json-options
 from /core/codecs import decode-base64
 from /core/collections import list
-from /core/documents import document-map-entries, make-document-none, make-document-list, make-document-map, make-document-bool, make-document-integer
-from /core/errors import dependency-error, throwable, integer-conversion-overflow, coercion-error, index-error
-from /deps/headless-chrome import LaunchOptions as native-launch-options
-from /deps/headless-chrome import Browser as native-browser
-from /deps/headless-chrome import Arc-of-headless-chrome-Tab as native-tab
-from /deps/headless-chrome import Weak as native-listener-token
-from /deps/headless-chrome/protocol/cdp/types import Event as native-event
-from /deps/headless-chrome import PathBuf as native-pathbuf
-from /deps/crossbeam-channel import Duration as native-duration
+from /core/errors import
+    dependency-error, throwable, integer-conversion-overflow,
+    coercion-error, index-error
+from /deps/headless-chrome import
+    LaunchOptions as native-launch-options, Browser as native-browser,
+    Arc-of-headless-chrome-Tab as native-tab,
+    Weak as native-listener-token, PathBuf as native-pathbuf
 from /deps/headless-chrome/browser import default_executable as default-executable
-from /deps/headless-chrome/protocol/cdp/page import Navigate, NavigateReturnObject
-from /deps/headless-chrome/protocol/cdp/page import GetFrameTree, GetFrameTreeReturnObject
-from /deps/headless-chrome/protocol/cdp/page import SetDocumentContent, SetDocumentContentReturnObject
-from /deps/headless-chrome/protocol/cdp/page import CaptureScreenshot, CaptureScreenshotReturnObject
-from /deps/headless-chrome/protocol/cdp/page import CaptureScreenshotFormatOption, Viewport
-from /deps/headless-chrome/protocol/cdp/page import GetLayoutMetrics, GetLayoutMetricsReturnObject
-from /deps/headless-chrome/protocol/cdp/page import PrintToPDF, PrintToPDFReturnObject
-from /deps/headless-chrome/protocol/cdp/runtime import RemoteObjectSubtype
-from /deps/headless-chrome/protocol/cdp/runtime import Evaluate, EvaluateReturnObject
-from /deps/headless-chrome/protocol/cdp/emulation import SetDeviceMetricsOverride, SetDeviceMetricsOverrideReturnObject
-from /deps/headless-chrome/protocol/cdp/network import Enable as native-network-enable, EnableReturnObject as native-network-enable-response
+from /deps/headless-chrome/protocol/cdp/types import Event as native-event
+from /deps/headless-chrome/protocol/cdp/page import
+    Navigate, NavigateReturnObject, GetFrameTree,
+    GetFrameTreeReturnObject, SetDocumentContent,
+    SetDocumentContentReturnObject, CaptureScreenshot,
+    CaptureScreenshotReturnObject, CaptureScreenshotFormatOption,
+    Viewport, GetLayoutMetrics, GetLayoutMetricsReturnObject,
+    PrintToPDF, PrintToPDFReturnObject
+from /deps/headless-chrome/protocol/cdp/runtime import
+    RemoteObjectSubtype, Evaluate, EvaluateReturnObject
+from /deps/headless-chrome/protocol/cdp/emulation import
+    SetDeviceMetricsOverride, SetDeviceMetricsOverrideReturnObject
+from /deps/headless-chrome/protocol/cdp/network import
+    Enable as native-network-enable, EnableReturnObject as native-network-enable-response
+from /deps/crossbeam-channel import Duration as native-duration
 from /deps/serde-json import Value as native-json-value
 
 
@@ -125,20 +131,30 @@ private function pdf-paper paper-dimensions; printing ref pdf-options
             throw chromium-error; 'named and custom paper sizes are mutually exclusive'
         switch
             case size == 'A3'
-                dimensions.width = 297.0 / 25.4
-                dimensions.height = 420.0 / 25.4
+                dimensions = {
+                    width = 297.0 / 25.4
+                    height = 420.0 / 25.4
+                }
             case size == 'A4'
-                dimensions.width = 210.0 / 25.4
-                dimensions.height = 297.0 / 25.4
+                dimensions = {
+                    width = 210.0 / 25.4
+                    height = 297.0 / 25.4
+                }
             case size == 'A5'
-                dimensions.width = 148.0 / 25.4
-                dimensions.height = 210.0 / 25.4
+                dimensions = {
+                    width = 148.0 / 25.4
+                    height = 210.0 / 25.4
+                }
             case size == 'Letter'
-                dimensions.width = 8.5
-                dimensions.height = 11.0
+                dimensions = {
+                    width = 8.5
+                    height = 11.0
+                }
             case size == 'Legal'
-                dimensions.width = 8.5
-                dimensions.height = 14.0
+                dimensions = {
+                    width = 8.5
+                    height = 14.0
+                }
             case else
                 throw chromium-error; 'unknown paper size: ' + size
     else
@@ -350,8 +366,9 @@ private function capture-events event-capture; tab ref native-tab, capacity int
         catch throwable as error
             statistics.record-failure; error.message
     token = tab.add_event_listener; move listener
-    captured = instance event-capture; statistics = statistics
-    captured.token = move token
+    captured = instance event-capture; statistics = statistics {
+        token = move token
+    }
     return move captured
 
 private function release-events string; state ref page-state
@@ -400,11 +417,12 @@ public function open-page shared ref page; browser ref browser-options, viewport
         tab native-tab = owner.new_tab;
         tab.set_default_timeout; move tab-timeout
         events = capture-events; tab, browser.diagnostic-capacity
-        state = instance page-state;
-        state.browser = move owner
-        state.tab = move tab
-        state.events = move events
-        state.timeout-ms = browser.timeout-ms
+        state = instance page-state; {
+            browser = move owner
+            tab = move tab
+            events = move events
+            timeout-ms = browser.timeout-ms
+        }
         managed = instance page; move state
         managed.enable-diagnostic-domains;
         managed.set-viewport; viewport
@@ -416,11 +434,12 @@ public function open-page shared ref page; browser ref browser-options, viewport
 private function page-navigate; target ref page, url ref string, loading ref load-options
     require-page; target.state
     deadline = page-deadline; target.state.timeout-ms
-    request = instance Navigate; url = url
-    request.referrer = none
-    request.transition-Type = none
-    request.frame-id = none
-    request.referrer-policy = none
+    request = instance Navigate; url = url {
+        referrer = none
+        transition-Type = none
+        frame-id = none
+        referrer-policy = none
+    }
     response = target.send-navigation; move request
     if response.error-text != none
         throw chromium-error; 'navigation failed: ' + response.error-text
@@ -432,8 +451,7 @@ private function page-navigate; target ref page, url ref string, loading ref loa
     if loader != none
         while true
             remaining-ms; deadline
-            frame-request = instance GetFrameTree;
-            frame-request.n0 = none
+            frame-request = instance GetFrameTree; { n0 = none }
             frame = target.send-frame; move frame-request
             if frame.frame-tree.frame.loader-id == loader
                 break
@@ -452,8 +470,7 @@ private function page-set-html; target ref page, html ref string, loading ref lo
         expression = '(()=>{const doc=new DOMParser().parseFromString(' + quoted-html + ',"text/html");const base=doc.createElement("base");base.href=' + quoted-base-url + ';doc.head.prepend(base);return (doc.doctype?new XMLSerializer().serializeToString(doc.doctype):"")+doc.documentElement.outerHTML;})()'
         prepared = page-evaluate-until; target, expression, false, deadline
         content = prepared.scalar
-    frame-request = instance GetFrameTree;
-    frame-request.n0 = none
+    frame-request = instance GetFrameTree; { n0 = none }
     frame = target.send-frame; move frame-request
     request = instance SetDocumentContent; frame-id = frame.frame-tree.frame.id, html = content
     target.send-html; move request
@@ -482,22 +499,23 @@ private function page-evaluate-until document-value; target ref page, expression
     script = expression
     if await-promise
         script = '(()=>{const start=Date.now();const value=(' + expression + ');let timer;return Promise.race([Promise.resolve(value),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error("JavaScript promise timed out")),Math.max(0,' + (remaining.to-string;) + '-(Date.now()-start)));})]).finally(()=>clearTimeout(timer));})()'
-    request = instance Evaluate; expression = script
-    request.object-group = none
-    request.include-command-line-api = false
-    request.silent = false
-    request.context-id = none
-    request.return-by-value = true
-    request.generate-preview = false
-    request.user-gesture = false
-    request.await-promise = await-promise
-    request.throw-on-side-effect = none
-    request.timeout = remaining
-    request.disable-breaks = none
-    request.repl-mode = none
-    request.allow-unsafe-eval-blocked-by-csp = none
-    request.unique-context-id = none
-    request.serialization-options = none
+    request = instance Evaluate; expression = script {
+        object-group = none
+        include-command-line-api = false
+        silent = false
+        context-id = none
+        return-by-value = true
+        generate-preview = false
+        user-gesture = false
+        await-promise = await-promise
+        throw-on-side-effect = none
+        timeout = remaining
+        disable-breaks = none
+        repl-mode = none
+        allow-unsafe-eval-blocked-by-csp = none
+        unique-context-id = none
+        serialization-options = none
+    }
     response = target.send-evaluation; move request
     exception = ref response.exception-details
     if exception != none
@@ -531,15 +549,16 @@ private function page-evaluate document-value; target ref page, expression ref s
 private function page-set-viewport; target ref page, viewport ref viewport-options
     require-page; target.state
     validate-viewport; viewport
-    request = instance SetDeviceMetricsOverride; width = viewport.width, height = viewport.height, device-scale-factor = viewport.device-scale-factor, mobile = false
-    request.scale = none
-    request.screen-width = none
-    request.screen-height = none
-    request.position-x = none
-    request.position-y = none
-    request.dont-set-visible-size = none
-    request.screen-orientation = none
-    request.viewport = none
+    request = instance SetDeviceMetricsOverride; width = viewport.width, height = viewport.height, device-scale-factor = viewport.device-scale-factor, mobile = false {
+        scale = none
+        screen-width = none
+        screen-height = none
+        position-x = none
+        position-y = none
+        dont-set-visible-size = none
+        screen-orientation = none
+        viewport = none
+    }
     target.send-viewport; move request
 
 private function page-wait-selector; target ref page, selector ref string
@@ -568,17 +587,18 @@ private function page-screenshot bytes; target ref page, options ref screenshot-
         request.format = (CaptureScreenshotFormatOption::Jpeg;)
     request.quality = quality
     if options.full-page
-        layout-request = instance GetLayoutMetrics;
-        layout-request.n0 = none
+        layout-request = instance GetLayoutMetrics; { n0 = none }
         layout = target.send-layout; move layout-request
         size = layout.css-content-size
         clip = instance Viewport; x = 0.0, y = 0.0, width = size.width, height = size.height, scale = 1.0
         request.clip = clip
     else
         request.clip = none
-    request.from-surface = true
-    request.capture-beyond-viewport = options.full-page
-    request.optimize-for-speed = none
+    request = {
+        from-surface = true
+        capture-beyond-viewport = options.full-page
+        optimize-for-speed = none
+    }
     response = target.send-screenshot; move request
     encoded = ref response.data
     decoded = decode-base64; encoded, false, true
@@ -598,24 +618,25 @@ private function page-print bytes; target ref page, printing ref pdf-options
     bottom = millimetres-to-inches; printing.margin-bottom-mm
     left = millimetres-to-inches; printing.margin-left-mm
     right = millimetres-to-inches; printing.margin-right-mm
-    request = instance PrintToPDF;
-    request.landscape = printing.landscape
-    request.display-header-footer = printing.display-header-footer
-    request.print-background = printing.print-background
-    request.scale = printing.scale
-    request.paper-width = dimensions.width
-    request.paper-height = dimensions.height
-    request.margin-top = top
-    request.margin-bottom = bottom
-    request.margin-left = left
-    request.margin-right = right
-    request.page-ranges = printing.page-ranges
-    request.header-template = none
-    request.footer-template = none
-    request.prefer-css-page-size = printing.prefer-css-page-size
-    request.transfer-mode = none
-    request.generate-tagged-pdf = none
-    request.generate-document-outline = none
+    request = instance PrintToPDF; {
+        landscape = printing.landscape
+        display-header-footer = printing.display-header-footer
+        print-background = printing.print-background
+        scale = printing.scale
+        paper-width = dimensions.width
+        paper-height = dimensions.height
+        margin-top = top
+        margin-bottom = bottom
+        margin-left = left
+        margin-right = right
+        page-ranges = printing.page-ranges
+        header-template = none
+        footer-template = none
+        prefer-css-page-size = printing.prefer-css-page-size
+        transfer-mode = none
+        generate-tagged-pdf = none
+        generate-document-outline = none
+    }
     response = target.send-print; move request
     encoded = ref response.data
     decoded = decode-base64; encoded, false, true
