@@ -242,94 +242,56 @@ public class page implements cdp-client
         this.state.injected-html = false
         try
             page-navigate; this, url, loading
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function set-html; html ref string, loading ref load-options
         this.state.injected-html = true
         try
             page-set-html; this, html, loading
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function set-viewport; viewport ref viewport-options
         try
             page-set-viewport; this, viewport
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function wait-for-selector; selector ref string
         try
             page-wait-selector; this, selector
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function wait-for; expression ref string
         try
             page-wait; this, expression
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function evaluate document-value; expression ref string, await-promise bool
         try
             return page-evaluate; this, expression, await-promise
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function screenshot bytes; options ref screenshot-options
         try
             return page-screenshot; this, options
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function print-pdf bytes; printing ref pdf-options
         try
             return page-print; this, printing
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error as error
             throw chromium-error; move error.message
 
     mutable function diagnostics document-value;
         try
             return page-diagnostics; this
-        catch dependency-error as error
-            throw chromium-error; move error.message
-        catch integer-conversion-overflow as error
-            throw chromium-error; move error.message
-        catch coercion-error as error
-            throw chromium-error; move error.message
-        catch index-error as error
+        catch dependency-error, integer-conversion-overflow, coercion-error, index-error as error
             throw chromium-error; move error.message
     mutable function close;
         if this.state.browser == none
