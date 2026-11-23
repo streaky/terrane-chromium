@@ -882,7 +882,6 @@ dependencies = [
  "ppv-lite86",
  "serde_core",
  "serde_json",
- "tempfile",
  "url",
 ]
 

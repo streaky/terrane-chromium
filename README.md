@@ -87,3 +87,4 @@ terrane test . --argument "$CHROME" --timeout 60s
 ```
 
 The real-browser cases exercise page operations against controlled fixtures. Without a browser argument they skip; the missing-executable unit regression needs no installed browser. The docs-converter suite separately checks its PDF consumer behavior.
+The custom PDF geometry case sends the rendered bytes to `pdfinfo` and `pdftotext` over stdin. These Poppler tools are optional; install both to exercise both geometry checks.

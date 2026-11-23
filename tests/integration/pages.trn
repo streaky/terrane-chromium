@@ -7,6 +7,7 @@ from /core/collections import list, range
 from /core/errors import throwable
 from /core/documents import document-value
 from /core/process import exit, make-exit-status
+from /core/process/child import process-error, run-process
 from /streaky/chromium import
     browser-options, viewport-options, load-options,
     screenshot-options, pdf-options, open-page, chromium-error
@@ -237,66 +238,64 @@ function test-page-diagnostics-record-script-errors throws throwable;
     assert-equal-bool; saw-javascript-error, true
     page.close;
 
+private function poppler-output bytes|none; tool string, args list of string, pdf ref bytes
+    try
+        capture = run-process; tool, args, input = pdf, timeout-ms = 5000, stdout-limit = 131072, stderr-limit = 16384
+        if not capture.status.timed-out and not capture.stdout-truncated and not capture.stderr-truncated
+            code = capture.status.exit-code
+            if code != none
+                if code == 0
+                    return move capture.stdout
+        test-fail; (tool + ' failed, timed out or exceeded its capture bounds')
+    catch process-error as error
+        # The core error does not expose an OS error kind. Skip only an absent
+        # optional executable; preserve launch and I/O failures for installed tools.
+        absent bool = rust
+            let search = std::env::var_os("PATH").unwrap_or_else(|| "/bin:/usr/bin".into());
+            std::env::split_paths(&search)
+                .all(|directory| matches!(directory.join(&tool).try_exists(), Ok(false)))
+        if absent
+            return none
+        throw error
+    return none
+
 private function custom-paper-metadata string; pdf ref bytes
-    result string = rust
-        use std::process::Command;
-        let path = std::env::temp_dir().join(format!(
-            "terrane-chromium-page-{}.pdf",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
-        ));
-        std::fs::write(&path, pdf).expect("write temporary page PDF");
-        let info = Command::new("pdfinfo").arg(&path).output();
-        let _ = std::fs::remove_file(&path);
-        match info {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "unavailable".to_string(),
-            Ok(output) if output.status.success() => {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let size = text.lines().find(|line| line.starts_with("Page size:"));
-                match size {
-                    Some(line) => {
-                        let numbers: Vec<f64> = line.split_whitespace()
-                            .filter_map(|part| part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').parse().ok())
-                            .collect();
-                        if numbers.len() >= 2 && numbers[0] > 500.0 && numbers[0] < 520.0
-                            && numbers[1] > 330.0 && numbers[1] < 350.0 {
-                            "custom-landscape".to_string()
-                        } else { "unexpected-size".to_string() }
-                    }
-                    None => "missing-page-size".to_string(),
+    captured = poppler-output; 'pdfinfo', (list; '-'), pdf
+    if captured != none
+        metadata bytes = captured
+        return rust
+            let text = String::from_utf8_lossy(&metadata);
+            match text.lines().find(|line| line.starts_with("Page size:")) {
+                Some(line) => {
+                    let numbers: Vec<f64> = line.split_whitespace()
+                        .filter_map(|part| part.trim_matches(|c: char| !c.is_ascii_digit() && c != '.').parse().ok())
+                        .collect();
+                    if numbers.len() >= 2 && numbers[0] > 500.0 && numbers[0] < 520.0
+                        && numbers[1] > 330.0 && numbers[1] < 350.0 {
+                        "custom-landscape".to_string()
+                    } else { "unexpected-size".to_string() }
                 }
+                None => "missing-page-size".to_string(),
             }
-            _ => "pdfinfo-failed".to_string(),
-        }
-    return result
+    return 'unavailable'
 
 private function custom-margin-metadata string; pdf ref bytes
-    result string = rust
-        use std::process::Command;
-        let path = std::env::temp_dir().join(format!(
-            "terrane-chromium-margin-{}.pdf",
-            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).expect("clock").as_nanos()
-        ));
-        std::fs::write(&path, pdf).expect("write temporary page PDF");
-        let output = Command::new("pdftotext").arg("-bbox").arg(&path).arg("-").output();
-        let _ = std::fs::remove_file(&path);
-        match output {
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "unavailable".to_string(),
-            Ok(output) if output.status.success() => {
-                let text = String::from_utf8_lossy(&output.stdout);
-                let word = text.split("<word ").nth(1).unwrap_or("");
-                let attribute = |name: &str| -> Option<f64> {
-                    let value = word.split_once(name)?.1.split_once('"')?.1.split_once('"')?.0;
-                    value.parse().ok()
-                };
-                match (attribute("xMin="), attribute("yMin=")) {
-                    (Some(x), Some(y)) if x > 20.0 && x < 38.0 && y > 14.0 && y < 32.0 =>
-                        "custom-margins".to_string(),
-                    _ => "unexpected-margins".to_string(),
-                }
+    captured = poppler-output; 'pdftotext', (list; '-bbox', '-', '-'), pdf
+    if captured != none
+        metadata bytes = captured
+        return rust
+            let text = String::from_utf8_lossy(&metadata);
+            let word = text.split("<word ").nth(1).unwrap_or("");
+            let attribute = |name: &str| -> Option<f64> {
+                let value = word.split_once(name)?.1.split_once('"')?.1.split_once('"')?.0;
+                value.parse().ok()
+            };
+            match (attribute("xMin="), attribute("yMin=")) {
+                (Some(x), Some(y)) if x > 20.0 && x < 38.0 && y > 14.0 && y < 32.0 =>
+                    "custom-margins".to_string(),
+                _ => "unexpected-margins".to_string(),
             }
-            _ => "pdftotext-failed".to_string(),
-        }
-    return result
+    return 'unavailable'
 
 function test-page-pdf-custom-paper-prints-bytes throws throwable;
     browser = browser-for-test;

@@ -2,10 +2,12 @@ namespace streaky/chromium
 
 from /core/testing import assert, assert-near
 from /core/errors import throwable
+from /core/filesystem import filesystem-capability, filesystem-create-temporary-directory
+from /core/filesystem/paths import path, join-path
 
 function test-invalid-executable-raises-chromium-error none throws throwable;
-    missing string = rust
-        tempfile::tempdir().expect("create isolated browser fixture").path().join("missing-browser").to_string_lossy().into_owned()
+    directory = filesystem-create-temporary-directory; (filesystem-capability;)
+    missing = (join-path; (directory.location;), (instance path; 'missing-browser')).text
     browser = instance browser-options; { executable = missing }
     printing = instance pdf-options;
     html = '<!doctype html><p>Browser failure</p>'

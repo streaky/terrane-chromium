@@ -30,8 +30,3 @@ integration = "tests/integration"
 [testing.profile]
 name = "chromium-tests"
 capabilities = ["filesystem", "process", "threads", "networking", "build", "clocks"]
-
-[rust-dependencies.tempfile]
-version = "=3.27.0"
-effects = ["filesystem"]
-
