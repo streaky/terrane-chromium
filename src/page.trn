@@ -345,6 +345,9 @@ private function release-events string; state ref page-state
                     return error.message
     return ''
 
+private function executable-path native-pathbuf; text ref string
+    return native-pathbuf::from; text
+
 public function open-page shared ref page; browser ref browser-options, viewport ref viewport-options
     validate-viewport; viewport
     if browser.timeout-ms <= 0 or browser.timeout-ms > 2147483647
@@ -358,16 +361,13 @@ public function open-page shared ref page; browser ref browser-options, viewport
         throw chromium-error; move error.message
     launch-path native-pathbuf|none = none
     executable = browser.executable
-    if executable == none
+    if executable != none
+        launch-path = executable-path; executable
+    else
         try
             launch-path = default-executable;
         catch dependency-error as error
             throw chromium-error; 'could not find Chromium: ' + error.message
-    else
-        # chromium/projection-pathbuf: source text to PathBuf conversion is not
-        # projected. Remove this typed conversion when PathBuf construction projects.
-        launch-path = rust
-            executable.as_deref().map(std::path::PathBuf::from)
     idle-timeout native-duration = native-duration::from_secs; 30
     empty-arguments list of string = list;
     options = instance native-launch-options; headless = true, sandbox = true, devtools = false, enable-gpu = false, enable-logging = false, window-size = none, port = none, ignore-certificate-errors = true, path = move launch-path, user-data-dir = none, extensions = empty-arguments, args = empty-arguments, ignore-default-args = empty-arguments, disable-default-args = false, idle-browser-timeout = move idle-timeout, process-envs = none, proxy-server = none

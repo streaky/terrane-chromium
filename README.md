@@ -57,7 +57,7 @@ Public types belong to `streaky/chromium`; native browser and tab handles are pr
 
 The private associated-type contract binds each operation to its projected response type. Source methods call the retained tab's generic CDP operation directly; no request wrapper allocation or packed numeric argument vector mediates that relationship. Evaluation converts a borrowed native JSON value directly into a document through the explicit JSON adapter, without serializing and reparsing it.
 
-Source constructs `LaunchOptions` with the pinned upstream defaults and calls `Browser::new`; managed page state owns the browser, fresh tab, retained listener token and checked shared diagnostic buffer. The fresh tab avoids Chrome's privileged new-tab CSP, which blocks scripts in installed HTML. Executable discovery is projected and retains its native error; a small inline conversion maps executable text to owned `PathBuf`. Remove it when path construction projects.
+Source constructs `LaunchOptions` with the pinned upstream defaults and calls `Browser::new`; managed page state owns the browser, fresh tab, retained listener token and checked shared diagnostic buffer. The fresh tab avoids Chrome's privileged new-tab CSP, which blocks scripts in installed HTML. Executable discovery is projected and retains its native error. When an explicit executable is supplied, projected `PathBuf::from` borrows its text and constructs the owned path without an inline Rust shim.
 
 Browser wall-clock and sleep primitives remain because the native `Instant` is opaque and `/core/time` is virtual under the native test runner. Remove those primitives when a projected host clock/sleep path exists. No retained Rust operation exists to avoid short-lived clones.
 
