@@ -91,6 +91,8 @@ private class native-event-payload
         this.params = move params
 
 private function event-payload (native-event-payload)|none; event ref native-event
+    # Match borrowed variant payloads and serialize them directly; owning variant
+    # extraction or a JSON round trip would change this boundary.
     return rust
         macro_rules! payload {
             ($kind:literal, $params:expr) => {{

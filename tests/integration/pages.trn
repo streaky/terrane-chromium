@@ -263,6 +263,8 @@ private function custom-paper-metadata string; pdf ref bytes
     captured = poppler-output; 'pdfinfo', (list; '-'), pdf
     if captured != none
         metadata bytes = captured
+        # Parse external pdfinfo output while retaining lossy decoding for arbitrary
+        # tool bytes; this is test-only metadata, not the PDF generation path.
         return rust
             let text = String::from_utf8_lossy(&metadata);
             match text.lines().find(|line| line.starts_with("Page size:")) {
@@ -283,6 +285,8 @@ private function custom-margin-metadata string; pdf ref bytes
     captured = poppler-output; 'pdftotext', (list; '-bbox', '-', '-'), pdf
     if captured != none
         metadata bytes = captured
+        # Parse pdftotext's XML-like bounding-box output without a maintained parser
+        # dependency; this checks print margins only.
         return rust
             let text = String::from_utf8_lossy(&metadata);
             let word = text.split("<word ").nth(1).unwrap_or("");

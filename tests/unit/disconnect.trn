@@ -8,7 +8,8 @@ function test-unexpected-target-close-is-a-typed-diagnostic-failure throws throw
     arguments = test-arguments;
     if arguments.length < 1 or not arguments[0].is-text
         skip; 'supply a Chromium executable path as the first --argument'
-    # Match the integration harness's child-only short browser socket directory.
+    # Re-exec only the test case to provide Chromium a short Unix socket directory;
+    # process environment and the runner's result channel remain parent-owned.
     child-status int32 = rust
         if cfg!(unix) && std::env::var_os("TERRANE_CHROMIUM_TEST_CHILD").is_none() {
             std::env::current_exe().and_then(|executable|
